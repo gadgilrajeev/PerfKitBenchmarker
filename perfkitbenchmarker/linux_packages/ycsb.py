@@ -215,10 +215,6 @@ flags.DEFINE_integer(
     'if we have already reached sustained throughput.')
 flags.DEFINE_integer('ycsb_sleep_after_load_in_sec', 0,
                      'Sleep duration in seconds between load and run stage.')
-flags.DEFINE_boolean(
-    'ycsb_log_remote_command_output', True,
-    'Whether to log the remote command\'s output at the info '
-    'level.')
 _BURST_LOAD_MULTIPLIER = flags.DEFINE_integer(
     'ycsb_burst_load', None,
     'If set, applies burst load to the system, by running YCSB once, and then '
@@ -421,11 +417,13 @@ def Install(vm):
     # _JAVA_OPTIONS needed to work around this issue:
     # https://stackoverflow.com/questions/53010200/maven-surefire-could-not-find-forkedbooter-class
     # https://stackoverflow.com/questions/34170811/maven-connection-reset-error
-    vm.RemoteCommand('cd {hist_dir}; _JAVA_OPTIONS=-Djdk.net.URLClassPath.'
-                     'disableClassPathURLCheck=true,https.protocols=TLSv1.2 '
-                     '{mvn_cmd}'.format(
-                         hist_dir=HDRHISTOGRAM_DIR,
-                         mvn_cmd=maven.GetRunCommand('install')))
+    vm.RemoteCommand(
+        'cd {hist_dir} && _JAVA_OPTIONS=-Djdk.net.URLClassPath.'
+        'disableClassPathURLCheck=true,https.protocols=TLSv1.2 '
+        '{mvn_cmd}'.format(
+            hist_dir=HDRHISTOGRAM_DIR, mvn_cmd=maven.GetRunCommand('install')
+        )
+    )
 
 
 @dataclasses.dataclass
@@ -1173,7 +1171,7 @@ class YCSBExecutor:
     for parameter, value in parameters.items():
       command.extend(('-p', '{0}={1}'.format(parameter, value)))
 
-    return 'cd %s; %s' % (YCSB_DIR, ' '.join(command))
+    return 'cd %s && %s' % (YCSB_DIR, ' '.join(command))
 
   @property
   def _default_preload_threads(self):
@@ -1567,8 +1565,11 @@ class YCSBExecutor:
             'sudo chmod 755 {1}{2}.hdr && echo "{0}" >> {1}{2}.hdr'.format(
                 hdr[:-1], hdr_files_dir, grouptype))
       hdrhistogram, _ = worker_vm.RemoteCommand(
-          'cd {0}; ./HistogramLogProcessor -i {1}{2}.hdr -outputValueUnitRatio '
-          '1'.format(self.hdr_dir, hdr_files_dir, grouptype))
+          'cd {0} && ./HistogramLogProcessor -i {1}{2}.hdr'
+          ' -outputValueUnitRatio 1'.format(
+              self.hdr_dir, hdr_files_dir, grouptype
+          )
+      )
       hdrhistograms[grouptype.lower()] = hdrhistogram
     return hdrhistograms
 

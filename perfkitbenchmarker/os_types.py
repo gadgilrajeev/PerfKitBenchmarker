@@ -16,17 +16,27 @@
 from absl import flags
 
 AMAZONLINUX2 = 'amazonlinux2'
+AMAZONLINUX2023 = 'amazonlinux2023'
 AMAZON_NEURON = 'amazon_neuron'
 CENTOS7 = 'centos7'
 CENTOS8 = 'centos8'  # deprecated
 CENTOS_STREAM8 = 'centos_stream8'
 CENTOS_STREAM9 = 'centos_stream9'
 CLEAR = 'clear'
-COS = 'cos'
+COS = 'cos'  # stable
+COS105 = 'cos105'
+COS101 = 'cos101'
+COS97 = 'cos97'
+COS93 = 'cos93'
+COS_DEV = 'cos_dev'
 CORE_OS = 'core_os'
 DEBIAN9 = 'debian9'
 DEBIAN10 = 'debian10'
+DEBIAN10_BACKPORTS = 'debian10_backports'
 DEBIAN11 = 'debian11'
+DEBIAN11_BACKPORTS = 'debian11_backports'
+FEDORA36 = 'fedora36'
+FEDORA37 = 'fedora37'
 JUJU = 'juju'
 RHEL7 = 'rhel7'
 RHEL8 = 'rhel8'
@@ -70,10 +80,16 @@ WINDOWS = 'windows'
 CONTAINER_OS_TYPES = [
     CORE_OS,
     COS,
+    COS105,
+    COS101,
+    COS97,
+    COS93,
+    COS_DEV,
 ]
 
 LINUX_OS_TYPES = CONTAINER_OS_TYPES + [
     AMAZONLINUX2,
+    AMAZONLINUX2023,
     AMAZON_NEURON,
     CENTOS7,
     CENTOS8,
@@ -82,7 +98,11 @@ LINUX_OS_TYPES = CONTAINER_OS_TYPES + [
     CLEAR,
     DEBIAN9,
     DEBIAN10,
+    DEBIAN10_BACKPORTS,
     DEBIAN11,
+    DEBIAN11_BACKPORTS,
+    FEDORA36,
+    FEDORA37,
     JUJU,
     RHEL7,
     RHEL8,
@@ -124,6 +144,7 @@ WINDOWS_SQLSERVER_OS_TYPES = [
     WINDOWS2022_SQLSERVER_2019_ENTERPRISE,
 ]
 
+CENTOS_TYPES = [CENTOS7, CENTOS8, CENTOS_STREAM8, CENTOS_STREAM9]
 WINDOWS_OS_TYPES = (
     WINDOWS_CORE_OS_TYPES + WINDOWS_DESKOP_OS_TYPES +
     WINDOWS_SQLSERVER_OS_TYPES)

@@ -107,7 +107,7 @@ class StaticDisk(disk.BaseDisk):
     """StaticDisks don't implement _Delete()."""
     pass
 
-  def Attach(self):
+  def Attach(self, vm):
     """StaticDisks don't implement Attach()."""
     pass
 
@@ -357,6 +357,16 @@ class Rhel8BasedStaticVirtualMachine(StaticVirtualMachine,
 
 class Rhel9BasedStaticVirtualMachine(StaticVirtualMachine,
                                      linux_virtual_machine.Rhel9Mixin):
+  pass
+
+
+class Fedora36BasedStaticVirtualMachine(StaticVirtualMachine,
+                                        linux_virtual_machine.Fedora36Mixin):
+  pass
+
+
+class Fedora37BasedStaticVirtualMachine(StaticVirtualMachine,
+                                        linux_virtual_machine.Fedora37Mixin):
   pass
 
 

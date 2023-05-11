@@ -37,17 +37,19 @@ import posixpath
 import re
 import threading
 import time
-from typing import Dict, Optional, Tuple, Set
+from typing import Any, Dict, Optional, Set, Tuple, Union
 import uuid
 
 from absl import flags
 from packaging import version as packaging_version
+from perfkitbenchmarker import background_tasks
 from perfkitbenchmarker import context
 from perfkitbenchmarker import disk
 from perfkitbenchmarker import errors
 from perfkitbenchmarker import linux_packages
 from perfkitbenchmarker import os_types
 from perfkitbenchmarker import regex_util
+from perfkitbenchmarker import sample
 from perfkitbenchmarker import virtual_machine
 from perfkitbenchmarker import vm_util
 
@@ -93,14 +95,14 @@ flags.DEFINE_bool('setup_remote_firewall', False,
 flags.DEFINE_list('sysctl', [],
                   'Sysctl values to set. This flag should be a comma-separated '
                   'list of path=value pairs. Each pair will be appended to'
-                  '/etc/sysctl.conf.  The presence of any items in this list '
-                  'will cause a reboot to occur after VM prepare. '
+                  '/etc/sysctl.conf.  '
                   'For example, if you pass '
                   '--sysctls=vm.dirty_background_ratio=10,vm.dirty_ratio=25, '
                   'PKB will append "vm.dirty_background_ratio=10" and'
-                  '"vm.dirty_ratio=25" on separate lines to /etc/sysctrl.conf'
-                  ' and then the machine will be rebooted before starting'
-                  'the benchmark.')
+                  '"vm.dirty_ratio=25" on separate lines to /etc/sysctrl.conf')
+
+flags.DEFINE_bool('reboot_after_changing_sysctl', False,
+                  'Whether PKB should reboot after applying sysctl changes')
 
 flags.DEFINE_list(
     'set_files',
@@ -117,8 +119,7 @@ flags.DEFINE_bool('network_enable_BBR', False,
                   'A shortcut to enable BBR congestion control on the network. '
                   'equivalent to appending to --sysctls the following values '
                   '"net.core.default_qdisc=fq, '
-                  '"net.ipv4.tcp_congestion_control=bbr" '
-                  'As with other sysctrls, will cause a reboot to happen.')
+                  '"net.ipv4.tcp_congestion_control=bbr" ')
 
 flags.DEFINE_integer('num_disable_cpus', None,
                      'Number of CPUs to disable on the virtual machine.'
@@ -189,13 +190,17 @@ flags.DEFINE_boolean('disable_smt', False,
                      'Whether to disable SMT (Simultaneous Multithreading) '
                      'in BIOS.')
 
-flags.DEFINE_bool(
-    'install_dpdk', False,
-    'Determines whether to install Data Plane Development Kit (DPDK) for '
-    'faster network packet processing.')
-
 _DISABLE_YUM_CRON = flags.DEFINE_boolean(
     'disable_yum_cron', True, 'Whether to disable the cron-run yum service.')
+_KERNEL_MODULES_TO_ADD = flags.DEFINE_list(
+    'kernel_modules_to_add', [], 'Kernel modules to add to Linux VMs')
+_KERNEL_MODULES_TO_REMOVE = flags.DEFINE_list(
+    'kernel_modules_to_remove', [], 'Kernel modules to remove from Linux VMs')
+
+
+# RHEL package managers
+YUM = 'yum'
+DNF = 'dnf'
 
 RETRYABLE_SSH_RETCODE = 255
 
@@ -344,7 +349,8 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     self.remote_access_ports = [self.ssh_port]
     self.primary_remote_access_port = self.ssh_port
     self.has_private_key = False
-    self.has_dpdk = False
+    self.ssh_external_time = None
+    self.ssh_internal_time = None
 
     self._remote_command_script_upload_lock = threading.Lock()
     self._has_remote_command_script = False
@@ -473,7 +479,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
 
     start_command = '%s 1> %s 2>&1 &' % (' '.join(start_command),
                                          wrapper_log)
-    self.RemoteCommand(start_command)
+    self.RemoteCommand(start_command, stack_level=3)
 
     def _WaitForCommand():
       wait_command = ['python3', wait_path,
@@ -482,20 +488,21 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       stdout = ''
       while 'Command finished.' not in stdout:
         stdout, _ = self.RemoteCommand(
-            ' '.join(wait_command), timeout=1800)
+            ' '.join(wait_command), timeout=1800, stack_level=4)
       wait_command.extend([
           '--stdout', stdout_file,
           '--stderr', stderr_file,
           '--delete',
       ])  # pyformat: disable
       return self.RemoteCommand(' '.join(wait_command),
-                                ignore_failure=ignore_failure)
+                                ignore_failure=ignore_failure,
+                                stack_level=4)
 
     try:
       return _WaitForCommand()
     except errors.VirtualMachine.RemoteCommandError:
       # In case the error was with the wrapper script itself, print the log.
-      stdout, _ = self.RemoteCommand('cat %s' % wrapper_log)
+      stdout, _ = self.RemoteCommand('cat %s' % wrapper_log, stack_level=3)
       if stdout.strip():
         logging.warning('Exception during RobustRemoteCommand. '
                         'Wrapper script log:\n%s', stdout)
@@ -545,13 +552,10 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       # Call SetupPackageManager lazily from HasPackage/InstallPackages like
       # ShouldDownloadPreprovisionedData sets up object storage CLIs.
       self.SetupPackageManager()
-    # Install DPDK for better networking performance.
-    if FLAGS.install_dpdk:
-      self.InstallPackages('dpdk')
-      self.has_dpdk = True
     self.SetFiles()
     self.DoSysctls()
     self._DoAppendKernelCommandLine()
+    self.ModifyKernelModules()
     self.DoConfigureNetworkForBBR()
     self.DoConfigureTCPWindow()
     self.UpdateEnvironmentPath()
@@ -650,10 +654,9 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
               out_file=out_file, fill_size=FLAGS.disk_fill_size))
 
   def _ApplySysctlPersistent(self, sysctl_params):
-    """Apply "key=value" pairs to /etc/sysctl.conf and mark the VM for reboot.
+    """Apply "key=value" pairs to /etc/sysctl.conf and load via sysctl -p.
 
-    The reboot ensures the values take effect and remain persistent across
-    future reboots.
+    These values should remain persistent across future reboots.
 
     Args:
       sysctl_params: dict - the keys and values to write
@@ -665,19 +668,21 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       self.RemoteCommand('sudo bash -c \'echo "%s=%s" >> /etc/sysctl.conf\''
                          % (key, value))
 
-    self._needs_reboot = True
+    # See https://www.golinuxcloud.com/sysctl-reload-without-reboot/
+    self.RemoteCommand('sudo sysctl -p')
 
-  def ApplySysctlPersistent(self, sysctl_params):
-    """Apply "key=value" pairs to /etc/sysctl.conf and reboot immediately.
+  def ApplySysctlPersistent(self, sysctl_params, should_reboot=False):
+    """Apply "key=value" pairs to /etc/sysctl.conf and load via sysctl -p.
 
-    The reboot ensures the values take effect and remain persistent across
-    future reboots.
+    These values should remain persistent across future reboots.
 
     Args:
       sysctl_params: dict - the keys and values to write
+      should_reboot: bool - whether to reboot after applying sysctl changes
     """
     self._ApplySysctlPersistent(sysctl_params)
-    self._RebootIfNecessary()
+    if should_reboot or FLAGS.reboot_after_changing_sysctl:
+      self.Reboot()
 
   def DoSysctls(self):
     """Apply --sysctl to the VM.
@@ -855,6 +860,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       except regex_util.NoMatchError:
         # TODO(user): Use alternative methods to retrieve partition table.
         logging.warning('Partition table not found with "%s".', cmd)
+        return {}
     return self._partition_table
 
   @vm_util.Retry(log_errors=False, poll_interval=1)
@@ -866,18 +872,40 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
         self.port_listening_time is None):
       self.TestConnectRemoteAccessPort()
       self.port_listening_time = time.time()
-
-    self._WaitForSSH()
+    connect_threads = [
+        (self._WaitForSshExternal, [], {}),
+        (self._WaitForSshInternal, [], {}),
+        ]
+    background_tasks.RunParallelThreads(connect_threads, len(connect_threads))
 
     if self.bootable_time is None:
       self.bootable_time = time.time()
 
+  def _WaitForSshExternal(self):
+    if self.boot_completion_ip_subset not in (
+        virtual_machine.BootCompletionIpSubset.EXTERNAL,
+        virtual_machine.BootCompletionIpSubset.BOTH,
+    ):
+      return
+    self._WaitForSSH(self.ip_address)
+    self.ssh_external_time = time.time()
+
+  def _WaitForSshInternal(self):
+    if self.boot_completion_ip_subset not in (
+        virtual_machine.BootCompletionIpSubset.INTERNAL,
+        virtual_machine.BootCompletionIpSubset.BOTH,
+    ):
+      return
+    self._WaitForSSH(self.internal_ip)
+    self.ssh_internal_time = time.time()
+
   @vm_util.Retry(log_errors=False, poll_interval=1)
-  def _WaitForSSH(self):
+  def _WaitForSSH(self, ip_address: Union[str, None] = None):
     """Waits until the VM is ready."""
     # Always wait for remote host command to succeed, because it is necessary to
     # run benchmarks
-    resp, _ = self.RemoteHostCommand('hostname', retries=1)
+    resp, _ = self.RemoteHostCommand('hostname', retries=1,
+                                     ip_address=ip_address)
     if self.hostname is None:
       self.hostname = resp[:-1]
 
@@ -890,12 +918,19 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     self.os_metadata['os_info'] = self.os_info
     self.os_metadata['kernel_release'] = str(self.kernel_release)
     self.os_metadata['cpu_arch'] = self.cpu_arch
-    self.os_metadata['has_dpdk'] = self.has_dpdk
     self.os_metadata.update(self.partition_table)
     if FLAGS.append_kernel_command_line:
       self.os_metadata['kernel_command_line'] = self.kernel_command_line
       self.os_metadata[
           'append_kernel_command_line'] = FLAGS.append_kernel_command_line
+    # TODO(pclay): consider publishing full lsmod as a sample. It's probably too
+    # spammy for metadata
+    if _KERNEL_MODULES_TO_ADD.value:
+      self.os_metadata['added_kernel_modules'] = ','.join(
+          _KERNEL_MODULES_TO_ADD.value)
+    if _KERNEL_MODULES_TO_REMOVE.value:
+      self.os_metadata['removed_kernel_modules'] = ','.join(
+          _KERNEL_MODULES_TO_REMOVE.value)
 
     devices = self._get_network_device_mtus()
     all_mtus = set(devices.values())
@@ -1099,6 +1134,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     Raises:
       RemoteCommandError: If there was a problem establishing the connection.
     """
+    kwargs = _IncrementStackLevel(**kwargs)
     return self.RemoteCommandWithReturnCode(*args, **kwargs)[:2]
 
   def RemoteCommandWithReturnCode(
@@ -1117,6 +1153,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     Raises:
       RemoteCommandError: If there was a problem establishing the connection.
     """
+    kwargs = _IncrementStackLevel(**kwargs)
     return self.RemoteHostCommandWithReturnCode(*args, **kwargs)
 
   def RemoteHostCommandWithReturnCode(
@@ -1126,6 +1163,8 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       ignore_failure: bool = False,
       login_shell: bool = False,
       timeout: Optional[float] = None,
+      ip_address: Optional[str] = None,
+      stack_level: int = 2,
   ) -> Tuple[str, str, int]:
     """Runs a command on the VM.
 
@@ -1140,6 +1179,10 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
       ignore_failure: Ignore any failure if set to true.
       login_shell: Run command in a login shell.
       timeout: The timeout for IssueCommand.
+      ip_address: The ip address to use to connect to host.  If None, uses
+        self.GetConnectionIp()
+      stack_level: Number of stack frames to skip & get an "interesting" caller,
+        for logging. 2 skips this function, 3 skips this & its caller, etc..
 
     Returns:
       A tuple of stdout, stderr, return_code from running the command.
@@ -1147,19 +1190,27 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     Raises:
       RemoteCommandError: If there was a problem establishing the connection.
     """
+    stack_level += 1
     if retries is None:
       retries = FLAGS.ssh_retries
     if vm_util.RunningOnWindows():
       # Multi-line commands passed to ssh won't work on Windows unless the
       # newlines are escaped.
       command = command.replace('\n', '\\n')
-    ip_address = self.GetConnectionIp()
+
+    if ip_address is None:
+      ip_address = self.GetConnectionIp()
     user_host = '%s@%s' % (self.user_name, ip_address)
     ssh_cmd = ['ssh', '-A', '-p', str(self.ssh_port), user_host]
     ssh_private_key = (self.ssh_private_key if self.is_static else
                        vm_util.GetPrivateKeyPath())
     ssh_cmd.extend(vm_util.GetSshOptions(ssh_private_key))
-    logging.info('Running on %s via ssh: %s', self.name, command)
+    logging.info(
+        'Running on %s via ssh: %s',
+        self.name,
+        command,
+        stacklevel=stack_level,
+    )
     try:
       if login_shell:
         ssh_cmd.extend(['-t', '-t', 'bash -l -c "%s"' % command])
@@ -1173,6 +1224,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
             timeout=timeout,
             should_pre_log=False,
             raise_on_failure=False,
+            stack_level=stack_level,
         )
         # Retry on 255 because this indicates an SSH failure
         if retcode != RETRYABLE_SSH_RETCODE:
@@ -1208,6 +1260,7 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     Raises:
       RemoteCommandError: If there was a problem establishing the connection.
     """
+    kwargs = _IncrementStackLevel(**kwargs)
     return self.RemoteHostCommandWithReturnCode(*args, **kwargs)[:2]
 
   def _CheckRebootability(self):
@@ -1554,6 +1607,13 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
           FLAGS.append_kernel_command_line, reboot=False)
       self._needs_reboot = True
 
+  def ModifyKernelModules(self):
+    """Add or remove kernel modules based on flags."""
+    for module in _KERNEL_MODULES_TO_ADD.value:
+      self.RemoteCommand(f'sudo modprobe {module}')
+    for module in _KERNEL_MODULES_TO_REMOVE.value:
+      self.RemoteCommand(f'sudo modprobe -r {module}')
+
   @abc.abstractmethod
   def InstallPackages(self, packages: str) -> None:
     """Installs packages using the OS's package manager."""
@@ -1624,6 +1684,17 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
         device['ModelNumber'] = device_info[2].strip()
         response.append(device)
       return response
+
+
+def _IncrementStackLevel(**kwargs: Any) -> Any:
+  """Increments the stack_level variable stored in kwargs."""
+  if 'stack_level' in kwargs:
+    kwargs['stack_level'] += 1
+  else:
+    # Default to 3 - one for helper function this is called from, one for
+    # RemoteHostCommandWithReturnCode, & one for logging.info itself.
+    kwargs['stack_level'] = 3
+  return kwargs
 
 
 class ClearMixin(BaseLinuxMixin):
@@ -1789,6 +1860,13 @@ class BaseContainerLinuxMixin(BaseLinuxMixin):
 class BaseRhelMixin(BaseLinuxMixin):
   """Class holding RHEL/CentOS specific VM methods and attributes."""
 
+  # In all RHEL 8+ based distros yum is an alias to dnf.
+  # dnf is backwards compatibile with yum, but has some additional capabilities
+  # For CentOS and RHEL 7 we override this to yum and do not pass dnf-only flags
+  # The commands are similar enough that forking whole methods seemed necessary.
+  # This can be removed when CentOS and RHEL 7 are no longer supported by PKB.
+  PACKAGE_MANAGER = DNF
+
   # OS_TYPE = os_types.RHEL
   BASE_OS_TYPE = os_types.RHEL
 
@@ -1800,10 +1878,14 @@ class BaseRhelMixin(BaseLinuxMixin):
                            login_shell=True)
     if FLAGS.gce_hpc_tools:
       self.InstallGcpHpcTools()
+    # yum cron can stall causing yum commands to hang
     if _DISABLE_YUM_CRON.value:
-      # yum cron can stall causing yum commands to hang
-      self.RemoteHostCommand('sudo systemctl disable yum-cron.service',
-                             ignore_failure=True)
+      if self.PACKAGE_MANAGER == YUM:
+        self.RemoteHostCommand('sudo systemctl disable yum-cron.service',
+                               ignore_failure=True)
+      elif self.PACKAGE_MANAGER == DNF:
+        self.RemoteHostCommand('sudo systemctl disable dnf-automatic.timer',
+                               ignore_failure=True)
 
   def InstallGcpHpcTools(self):
     """Installs the GCP HPC tools."""
@@ -1833,19 +1915,25 @@ class BaseRhelMixin(BaseLinuxMixin):
 
   def HasPackage(self, package):
     """Returns True iff the package is available for installation."""
-    return self.TryRemoteCommand('sudo yum info %s' % package)
+    return self.TryRemoteCommand(f'sudo {self.PACKAGE_MANAGER} info {package}')
 
   # yum talks to the network on each request so transient issues may fix
   # themselves on retry
   @vm_util.Retry(max_retries=UPDATE_RETRIES)
   def InstallPackages(self, packages):
-    """Installs packages using the yum package manager."""
-    self.RemoteCommand('sudo yum install -y %s' % packages)
+    """Installs packages using the yum or dnf package managers."""
+    cmd = f'sudo {self.PACKAGE_MANAGER} install -y {packages}'
+    if self.PACKAGE_MANAGER == DNF:
+      cmd += ' --allowerasing'
+    self.RemoteCommand(cmd)
 
-  @vm_util.Retry()
+  @vm_util.Retry(max_retries=UPDATE_RETRIES)
   def InstallPackageGroup(self, package_group):
     """Installs a 'package group' using the yum package manager."""
-    self.RemoteCommand('sudo yum groupinstall -y "%s"' % package_group)
+    cmd = f'sudo {self.PACKAGE_MANAGER} groupinstall -y "{package_group}"'
+    if self.PACKAGE_MANAGER == DNF:
+      cmd += ' --allowerasing'
+    self.RemoteCommand(cmd)
 
   def Install(self, package_name):
     """Installs a PerfKit package on the VM."""
@@ -1893,7 +1981,10 @@ class BaseRhelMixin(BaseLinuxMixin):
   def SetupProxy(self):
     """Sets up proxy configuration variables for the cloud environment."""
     super(BaseRhelMixin, self).SetupProxy()
-    yum_proxy_file = '/etc/yum.conf'
+    if self.PACKAGE_MANAGER == YUM:
+      yum_proxy_file = '/etc/yum.conf'
+    elif self.PACKAGE_MANAGER == DNF:
+      yum_proxy_file = '/etc/dnf/dnf.conf'
 
     if FLAGS.http_proxy:
       self.RemoteCommand("echo -e 'proxy= %s' | sudo tee -a %s" % (
@@ -1913,6 +2004,7 @@ class BaseRhelMixin(BaseLinuxMixin):
 class AmazonLinux2Mixin(BaseRhelMixin):
   """Class holding Amazon Linux 2 VM methods and attributes."""
   OS_TYPE = os_types.AMAZONLINUX2
+  PACKAGE_MANAGER = YUM
 
   def SetupPackageManager(self):
     """Install EPEL."""
@@ -1925,9 +2017,17 @@ class AmazonNeuronMixin(AmazonLinux2Mixin):
   OS_TYPE = os_types.AMAZON_NEURON
 
 
+class AmazonLinux2023Mixin(BaseRhelMixin):
+  """Class holding Amazon Linux 2023 VM methods and attributes."""
+  OS_TYPE = os_types.AMAZONLINUX2023
+  # Note no EPEL support
+  # https://docs.aws.amazon.com/linux/al2023/ug/compare-with-al2.html#epel
+
+
 class Rhel7Mixin(BaseRhelMixin):
   """Class holding RHEL 7 specific VM methods and attributes."""
   OS_TYPE = os_types.RHEL7
+  PACKAGE_MANAGER = YUM
 
   def SetupPackageManager(self):
     """Install EPEL."""
@@ -1958,9 +2058,30 @@ class Rhel9Mixin(BaseRhelMixin):
     self.RemoteCommand(f'sudo dnf install -y {_EPEL_URL.format(9)}')
 
 
+class Fedora36Mixin(BaseRhelMixin):
+  """Class holding Fedora36 specific methods and attributes."""
+
+  OS_TYPE = os_types.FEDORA36
+  PYTHON_2_PACKAGE = None
+
+  def SetupPackageManager(self):
+    """Fedora does not need epel."""
+
+
+class Fedora37Mixin(BaseRhelMixin):
+  """Class holding Fedora37 specific methods and attributes."""
+
+  OS_TYPE = os_types.FEDORA37
+  PYTHON_2_PACKAGE = None
+
+  def SetupPackageManager(self):
+    """Fedora does not need epel."""
+
+
 class CentOs7Mixin(BaseRhelMixin):
   """Class holding CentOS 7 specific VM methods and attributes."""
   OS_TYPE = os_types.CENTOS7
+  PACKAGE_MANAGER = YUM
 
   def SetupPackageManager(self):
     """Install EPEL."""
@@ -2031,20 +2152,6 @@ class RockyLinux9Mixin(BaseRhelMixin):
     self.RemoteCommand(
         'sudo dnf config-manager --set-enabled crb &&'
         'sudo dnf install -y epel-release')
-
-
-class ContainerOptimizedOsMixin(BaseContainerLinuxMixin):
-  """Class holding COS specific VM methods and attributes."""
-  OS_TYPE = os_types.COS
-  BASE_OS_TYPE = os_types.CORE_OS
-
-  def PrepareVMEnvironment(self):
-    super(ContainerOptimizedOsMixin, self).PrepareVMEnvironment()
-    # COS mounts /home and /tmp with -o noexec, which blocks running benchmark
-    # binaries.
-    # TODO(user): Support reboots
-    self.RemoteCommand('sudo mount -o remount,exec /home')
-    self.RemoteCommand('sudo mount -o remount,exec /tmp')
 
 
 class CoreOsMixin(BaseContainerLinuxMixin):
@@ -2237,6 +2344,11 @@ class Debian10Mixin(BaseDebianMixin):
   OS_TYPE = os_types.DEBIAN10
 
 
+class Debian10BackportsMixin(Debian10Mixin):
+  """Debian 10 with backported kernel."""
+  OS_TYPE = os_types.DEBIAN10_BACKPORTS
+
+
 class Debian11Mixin(BaseDebianMixin):
   """Class holding Debian 11 specific VM methods and attributes."""
   OS_TYPE = os_types.DEBIAN11
@@ -2246,6 +2358,11 @@ class Debian11Mixin(BaseDebianMixin):
     # partitioning.
     self.InstallPackages('fdisk')
     super().PrepareVMEnvironment()
+
+
+class Debian11BackportsMixin(Debian11Mixin):
+  """Debian 11 with backported kernel."""
+  OS_TYPE = os_types.DEBIAN11_BACKPORTS
 
 
 class BaseUbuntuMixin(BaseDebianMixin):
@@ -2387,7 +2504,7 @@ class ContainerizedDebianMixin(BaseDebianMixin):
     # Escapes bash sequences
     command = command.replace("'", r"'\''")
 
-    logging.info('Docker running: %s', command)
+    logging.info('Docker running: %s', command, stacklevel=2)
     command = "sudo docker exec %s bash -c '%s'" % (self.docker_id, command)
     return self.RemoteHostCommand(command, **kwargs)
 
@@ -2506,6 +2623,17 @@ def _ParseTextProperties(text):
     yield current_data
 
 
+def CreateLscpuSamples(vms):
+  """Creates samples from linux VMs of lscpu output."""
+  samples = []
+  for vm in vms:
+    if vm.OS_TYPE in os_types.LINUX_OS_TYPES:
+      metadata = {'node_name': vm.name}
+      metadata.update(vm.CheckLsCpu().data)
+      samples.append(sample.Sample('lscpu', 0, '', metadata))
+  return samples
+
+
 class LsCpuResults(object):
   """Holds the contents of the command lscpu."""
 
@@ -2519,7 +2647,7 @@ class LsCpuResults(object):
       lscpu: A string in the format of "lscpu" command
 
     Raises:
-      ValueError: if the format of lscpu isnt what was expected for parsing
+      ValueError: if the format of lscpu isn't what was expected for parsing
 
     Example value of lscpu is:
     Architecture:          x86_64
@@ -2558,6 +2686,24 @@ class LsCpuResults(object):
     self.cores_per_socket = GetInt('Core(s) per socket')
     self.socket_count = GetInt('Socket(s)')
     self.threads_per_core = GetInt('Thread(s) per core')
+
+
+def CreateProcCpuSamples(vms):
+  """Creates samples from linux VMs of lscpu output."""
+  samples = []
+  for vm in vms:
+    if vm.OS_TYPE not in os_types.LINUX_OS_TYPES:
+      continue
+    data = vm.CheckProcCpu()
+    metadata = {'node_name': vm.name}
+    metadata.update(data.GetValues())
+    samples.append(sample.Sample('proccpu', 0, '', metadata))
+    metadata = {'node_name': vm.name}
+    for processor_id, raw_values in data.mappings.items():
+      values = ['%s=%s' % item for item in raw_values.items()]
+      metadata['proc_{}'.format(processor_id)] = ';'.join(sorted(values))
+    samples.append(sample.Sample('proccpu_mapping', 0, '', metadata))
+  return samples
 
 
 class ProcCpuResults(object):
@@ -2654,7 +2800,7 @@ class JujuMixin(BaseDebianMixin):
   is_controller = False
 
   # A reference to the juju controller, useful when operations occur against
-  # a unit's VM but need to be preformed from the controller.
+  # a unit's VM but need to be performed from the controller.
   controller = None
 
   vm_group = None
