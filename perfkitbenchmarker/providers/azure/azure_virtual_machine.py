@@ -41,7 +41,7 @@ from perfkitbenchmarker import disk
 from perfkitbenchmarker import errors
 from perfkitbenchmarker import linux_virtual_machine
 from perfkitbenchmarker import placement_group
-from perfkitbenchmarker import providers
+from perfkitbenchmarker import provider_info
 from perfkitbenchmarker import resource
 from perfkitbenchmarker import virtual_machine
 from perfkitbenchmarker import vm_util
@@ -127,7 +127,7 @@ class AzureVmSpec(virtual_machine.BaseVmSpec):
     low_priority: boolean. True if the VM should be low-priority, else False.
   """
 
-  CLOUD = providers.AZURE
+  CLOUD = provider_info.AZURE
 
   def __init__(self, *args, **kwargs):
     super(AzureVmSpec, self).__init__(*args, **kwargs)
@@ -323,7 +323,13 @@ class AzureNIC(resource.BaseResource):
     ] + self.resource_group.args)
 
     response = json.loads(stdout)
-    return response['ipConfigurations'][0]['privateIpAddress']
+    ip_config = response['ipConfigurations'][0]
+    # Azure CLI used privateIpAddress between versions 1.2.0 and 2.45.0
+    # https://learn.microsoft.com/en-us/cli/azure/release-notes-azure-cli?toc=%2Fcli%2Fazure%2Ftoc.json&bc=%2Fcli%2Fazure%2Fbreadcrumb%2Ftoc.json#network
+    for key in ('privateIPAddress', 'privateIpAddress'):
+      if key in ip_config:
+        return ip_config[key]
+    raise KeyError('No known private IP address key found.')
 
   def _Delete(self):
     self._deleted = True
@@ -517,7 +523,7 @@ def _MachineTypeIsArm(machine_type):
 
 class AzureVirtualMachine(virtual_machine.BaseVirtualMachine):
   """Object representing an Azure Virtual Machine."""
-  CLOUD = providers.AZURE
+  CLOUD = provider_info.AZURE
 
   _lock = threading.Lock()
   # TODO(user): remove host groups & hosts as globals -> create new spec
@@ -542,7 +548,10 @@ class AzureVirtualMachine(virtual_machine.BaseVirtualMachine):
     self.num_vms_per_host = vm_spec.num_vms_per_host
     self.network = azure_network.AzureNetwork.GetNetwork(self)
     self.firewall = azure_network.AzureFirewall.GetFirewall()
-    self.max_local_disks = NUM_LOCAL_VOLUMES.get(self.machine_type) or 1
+    if azure_disk.HasTempDrive(self.machine_type):
+      self.max_local_disks = NUM_LOCAL_VOLUMES.get(self.machine_type, 1)
+    else:
+      self.max_local_disks = 0
     self._lun_counter = itertools.count()
     self._deleted = False
     self.resource_group = azure_network.GetResourceGroup()
@@ -644,19 +653,29 @@ class AzureVirtualMachine(virtual_machine.BaseVirtualMachine):
 
     create_cmd = (
         [
-            azure.AZURE_PATH, 'vm', 'create',
-            '--location', self.region,
-            '--image', self.image,
-            '--size', self.machine_type,
-            '--admin-username', self.user_name,
-            '--storage-sku', self.os_disk.disk_type,
-            '--name', self.name
+            azure.AZURE_PATH,
+            'vm',
+            'create',
+            '--location',
+            self.region,
+            '--image',
+            self.image,
+            '--size',
+            self.machine_type,
+            '--admin-username',
+            self.user_name,
+            '--storage-sku',
+            self.os_disk.disk_type,
+            '--name',
+            self.name,
         ]  # pyformat: disable
         + disk_size_args
         + self.resource_group.args
         + self.nic.args
         + tag_args
     )
+    if self.boot_startup_script:
+      create_cmd.extend(['--custom-data', self.boot_startup_script])
 
     if self._RequiresUltraDisk():
       self.ultra_ssd_enabled = True
@@ -831,9 +850,9 @@ class AzureVirtualMachine(virtual_machine.BaseVirtualMachine):
         if self.local_disk_counter > self.max_local_disks:
           raise errors.Error('Not enough local disks.')
       else:
-        # Remote disk numbers start at max_local disks, Azure does not separate
-        # local disk and system disk.
-        disk_number = self.remote_disk_counter + self.max_local_disks
+        # Remote disk numbers start at 1 + max_local disks (0 is the system disk
+        # and local disks occupy [1, max_local_disks]).
+        disk_number = self.remote_disk_counter + 1 + self.max_local_disks
         self.remote_disk_counter += 1
       lun = next(self._lun_counter)
       data_disk = azure_disk.AzureDisk(disk_spec, self, lun)

@@ -40,15 +40,23 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer('aerospike_client_vms', 1,
                      'Number of client machines to use for running asbench.')
 flags.DEFINE_integer(
+    'aerospike_client_threads_for_load_phase',
+    8,
+    'The minimum number of client threads to use during the load phase.',
+    lower_bound=1,
+)
+flags.DEFINE_integer(
     'aerospike_min_client_threads',
     8,
     'The minimum number of Aerospike client threads per vm.',
-    lower_bound=1)
+    lower_bound=1,
+)
 flags.DEFINE_integer(
     'aerospike_max_client_threads',
     128,
     'The maximum number of Aerospike client threads per vm.',
-    lower_bound=1)
+    lower_bound=1,
+)
 flags.DEFINE_integer(
     'aerospike_client_threads_step_size',
     8, 'The number to increase the Aerospike client threads '
@@ -78,9 +86,31 @@ flags.DEFINE_integer(
 flags.DEFINE_string('aerospike_client_machine_type', None,
                     'Machine type to use for the aerospike client if different '
                     'from aerospike server machine type.')
-flags.DEFINE_string('aerospike_server_machine_type', None,
-                    'Machine type to use for the aerospike server if different '
-                    'from aerospike client machine type.')
+_PUBLISH_PERCENTILE_TIME_SERIES = flags.DEFINE_boolean(
+    'aerospike_publish_percentile_time_series',
+    True,
+    (
+        'Whether or not to publish one sample per aggregation'
+        'window with percentiles to capture'
+    ),
+)
+
+_PERCENTILES_TO_CAPTURE = flags.DEFINE_list(
+    'aerospike_percentiles_to_capture',
+    ['50', '90', '99', '99.9', '99.99'],
+    (
+        'List of percentiles to capture if'
+        ' aerospike_publish_percentile_time_series is set.'
+    ),
+)
+flags.DEFINE_string(
+    'aerospike_server_machine_type',
+    None,
+    (
+        'Machine type to use for the aerospike server if different '
+        'from aerospike client machine type.'
+    ),
+)
 
 BENCHMARK_NAME = 'aerospike'
 BENCHMARK_CONFIG = """
@@ -106,8 +136,9 @@ def GetConfig(user_config):
       config['vm_groups']['workers']['disk_count'] = (
           config['vm_groups']['workers']['disk_count'] or None)
       if FLAGS.cloud == 'GCP':
-        config['vm_groups']['workers']['vm_spec']['GCP'][
-            'num_local_ssds'] = FLAGS.gce_num_local_ssds or FLAGS.server_gce_num_local_ssds
+        config['vm_groups']['workers']['vm_spec']['GCP']['num_local_ssds'] = (
+            FLAGS.gce_num_local_ssds or FLAGS.server_gce_num_local_ssds
+        )
         FLAGS['gce_num_local_ssds'].present = False
         FLAGS.gce_num_local_ssds = 0
         if FLAGS['server_gce_ssd_interface'].present:
@@ -175,13 +206,15 @@ def Prepare(benchmark_spec):
 
   def _Load(client_idx, process_idx):
     ips = ','.join(seed_ips)
-    load_command = ('asbench '
-                    f'--threads {FLAGS.aerospike_min_client_threads} '
-                    '--namespace test --workload I '
-                    '--object-spec B1000 '
-                    f'--keys {loader_counts[client_idx]} '
-                    f'--start-key {sum(loader_counts[:client_idx])} '
-                    f' -h {ips} -p {3 + process_idx}000')
+    load_command = (
+        'asbench '
+        f'--threads {FLAGS.aerospike_client_threads_for_load_phase} '
+        '--namespace test --workload I '
+        '--object-spec B1000 '
+        f'--keys {loader_counts[client_idx]} '
+        f'--start-key {sum(loader_counts[:client_idx])} '
+        f' -h {ips} -p {3 + process_idx}000'
+    )
     clients[client_idx].RobustRemoteCommand(load_command)
 
   run_params = []
@@ -249,7 +282,10 @@ def Run(benchmark_spec):
         filename = f'result.{client_idx}.{process_idx}.{threads}'
         clients[client_idx].PullFile(vm_util.GetTempDir(), filename)
         result_files.append(filename)
-    if FLAGS.aerospike_publish_detailed_samples:
+    if (
+        FLAGS.aerospike_publish_detailed_samples
+        or _PUBLISH_PERCENTILE_TIME_SERIES.value
+    ):
       detailed_samples.extend(
           aerospike_client.ParseAsbenchHistogram(result_files))
       temp_samples.extend(detailed_samples)
@@ -263,7 +299,13 @@ def Run(benchmark_spec):
         'replication_factor': FLAGS.aerospike_replication_factor,
         'client_threads': threads,
         'read_percent': FLAGS.aerospike_read_percent,
+        'aerospike_edition': FLAGS.aerospike_edition.value,
     })
+    if FLAGS.aerospike_edition == aerospike_server.AerospikeEdition.ENTERPRISE:
+      metadata.update({
+          'aerospike_version': FLAGS.aerospike_enterprise_version,
+          'aerospike_package': FLAGS.aerospike_enterprise_package
+      })
     for s in temp_samples:
       s.metadata.update(metadata)
     samples.extend(temp_samples)
