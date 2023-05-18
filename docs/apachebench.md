@@ -41,24 +41,33 @@ perfkitbenchmarker.linux_benchmarks.apachebench_benchmark:
 
 
 ## Metrics captured
-CPU seconds (seconds):
+CPU seconds (seconds):  
+The total CPU time consumed.
 
-Failed requests (#):
+Failed requests (#):  
+The number of requests that failed or encountered errors.
 
-Raw Request Times (#):
+Raw Request Times (#):  
+The individual response times for each request made.
 
-Requests per second (#/sec):
+Requests per second (#/sec):  
+The average number of requests processed per second.
 
-Time per request concurrent (ms):
+Time per request concurrent (ms):  
+The average time taken to process a request, including concurrent requests, measured in milliseconds.
 
-Time per request (ms):
+Time per request (ms):  
+The average time taken to process a single request, measured in milliseconds.
 
-Transfer rate (Kbytes/sec):
+Transfer rate (Kbytes/sec):  
+The average rate of data transfer during the benchmark, measured in kilobytes per second.
 
-Total transferred (bytes):
+Total transferred (bytes):  
+The total amount of data transferred during the benchmark, measured in bytes.
 
-HTML transferred (bytes):
+HTML transferred (bytes):  
+The amount of HTML content transferred during the benchmark, measured in bytes.
 
-End to end Runtime (seconds): 
+End to end Runtime (seconds):  
 The total runtime of the test from initiation to (teardown complete?)
 

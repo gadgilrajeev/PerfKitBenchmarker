@@ -13,9 +13,10 @@ perfkitbenchmarker.linux_benchmarks.coremark_benchmark:
     (default: 'PTHREAD')
 ```
 ### See example configuration here: 
-Coremark Score (#):
 
 ## Metrics captured
+Coremark Score (#):
+The Coremark score is a measure of the performance of a computing system based on the Coremark benchmark. It represents the number of iterations completed within a specified time frame, indicating the system's ability to execute the benchmark workload. A higher Coremark score generally indicates better performance.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

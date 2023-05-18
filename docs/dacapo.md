@@ -16,7 +16,7 @@ perfkitbenchmarker.linux_benchmarks.coremark_benchmark:
 
 
 ## Metrics captured
-run_time (ms):
+run_time (ms): The total execution time of the benchmark, measured in milliseconds. It represents the time taken to run the entire workload of the benchmark and provides an indication of the overall performance and efficiency of the system.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

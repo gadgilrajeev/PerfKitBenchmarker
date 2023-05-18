@@ -19,7 +19,7 @@ perfkitbenchmarker.linux_benchmarks.copy_throughput_benchmark:
 
 
 ## Metrics captured
-cp throughput (MB/sec):
+cp throughput (MB/sec): The data transfer rate achieved during the copy operation, measured in megabytes per second. It indicates how quickly data is copied from the source to the destination.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

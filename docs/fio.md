@@ -74,35 +74,50 @@ perfkitbenchmarker.linux_benchmarks.fio_benchmark:
 
 
 ## Metrics captured
-sequential_write:write:iops (#):
+sequential_write:write:iops (#):  
+The number of sequential write I/O operations per second.
 
-sequential_read:read:iops (#):
+sequential_read:read:iops (#):  
+The number of sequential read I/O operations per second.
 
-random_write_test:write:iops (#):
+random_write_test:write:iops (#):  
+The number of random write I/O operations per second.
 
-random_read_test:read:iops (#):
+random_read_test:read:iops (#):  
+The number of random read I/O operations per second.
 
-random_read_test_parallel:read:iops (#):
+random_read_test_parallel:read:iops (#):  
+The number of parallel random read I/O operations per second.
 
-sequential_write:write:bandwidth (KB/s):
+sequential_write:write:bandwidth (KB/s):  
+The sequential write bandwidth measured in kilobytes per second.
 
-sequential_read:read:bandwidth (KB/s):
+sequential_read:read:bandwidth (KB/s):  
+The sequential read bandwidth measured in kilobytes per second.
 
-random_write_test:write:bandwidth (KB/s):
+random_write_test:write:bandwidth (KB/s):  
+The random write bandwidth measured in kilobytes per second.
 
-random_read_test:read:bandwidth (KB/s):
+random_read_test:read:bandwidth (KB/s):  
+The random read bandwidth measured in kilobytes per second.
 
-random_read_test_parallel:read:bandwidth (KB/s):
+random_read_test_parallel:read:bandwidth (KB/s):  
+The parallel random read bandwidth measured in kilobytes per second.
 
-sequential_write:write:latency (usec):
+sequential_write:write:latency (usec):  
+The latency of sequential write operations measured in microseconds.
 
-sequential_read:read:latency (usec):
+sequential_read:read:latency (usec):  
+The latency of sequential read operations measured in microseconds.
 
-random_write_test:write:latency (usec):
+random_write_test:write:latency (usec):  
+The latency of random write operations measured in microseconds.
 
-random_read_test:read:latency (usec):
+random_read_test:read:latency (usec):  
+The latency of random read operations measured in microseconds.
 
-random_read_test_parallel:read:latency (usec):
+random_read_test_parallel:read:latency (usec):  
+The latency of parallel random read operations measured in microseconds.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

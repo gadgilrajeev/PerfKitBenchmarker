@@ -30,15 +30,20 @@ perfkitbenchmarker.linux_benchmarks.cluster_boot_benchmark:
 
 
 ## Metrics captured
-Time to Create Async Return (seconds):
+Time to Create Async Return (seconds):  
+The time taken for the cluster creation request to return an asynchronous response, measured in seconds.
 
-Time to Running (seconds):
+Time to Running (seconds):  
+The time taken for the cluster to transition from the creation state to the running state, measured in seconds.
 
-Time to SSH - External (seconds):
+Time to SSH - External (seconds):  
+The time taken to establish an SSH connection with the cluster's external IP address, measured in seconds.
 
-Boot Time (seconds):
+Boot Time (seconds):  
+The total time taken for the cluster to boot up and become fully operational, measured in seconds.
 
-Cluster Boot Time (seconds):
+Cluster Boot Time (seconds):  
+The boot time specifically for the cluster, indicating the time required for all the nodes in the cluster to be ready, measured in seconds.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

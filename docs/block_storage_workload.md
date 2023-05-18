@@ -22,23 +22,32 @@ perfkitbenchmarker.linux_benchmarks.block_storage_workloads_benchmark:
 
 
 ## Metrics captured
-sequential_write:write:iops (#):
 
-random_read:read:iops (#):
+sequential_write:write:iops (#):  
+The number of sequential write Input/Output Operations Per Second (IOPS) achieved during the benchmark.
 
-sequential_read:read:iops (#):
+random_read:read:iops (#):  
+The number of random read IOPS achieved during the benchmark.
 
-sequential_write:write:bandwidth (KB/s):
+sequential_read:read:iops (#):  
+The number of sequential read IOPS achieved during the benchmark.
 
-random_read:read:bandwidth (KB/s):
+sequential_write:write:bandwidth (KB/s):  
+The sequential write bandwidth (data transfer rate) achieved during the benchmark, measured in kilobytes per second.
 
-sequential_read:read:bandwidth (KB/s):
+random_read:read:bandwidth (KB/s):  
+The random read bandwidth achieved during the benchmark, measured in kilobytes per second.
 
-sequential_write:write:latency (usec):
+sequential_read:read:bandwidth (KB/s):  
+The sequential read bandwidth achieved during the benchmark, measured in kilobytes per second.
 
-random_read:read:latency (usec):
+sequential_write:write:latency (usec):  
+The average latency (time delay) for sequential write operations.
+random_read:read:latency (usec):  
+The average latency for random read operations.
 
-sequential_read:read:latency (usec):
+sequential_read:read:latency (usec):  
+The average latency for sequential read operations.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)
