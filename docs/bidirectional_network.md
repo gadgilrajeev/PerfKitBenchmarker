@@ -23,19 +23,26 @@ perfkitbenchmarker.linux_benchmarks.bidirectional_network_benchmark:
 
 
 ## Metrics captured
-TCP_MAERTS_Throughput (Mbytes/sec):
+TCP_MAERTS_Throughput (Mbytes/sec):  
+The measured throughput (data transfer rate) in megabytes per second for the TCP_MAERTS benchmark.
 
-TCP_STREAM_Throughput (Mbytes/sec):
-	
-inbound_network_total (Mbytes/sec):
+TCP_STREAM_Throughput (Mbytes/sec):  
+The measured throughput (data transfer rate) in megabytes per second for the TCP_STREAM benchmark.
 
-outbound_network_total (Mbytes/sec):
+inbound_network_total (Mbytes/sec):  
+The total inbound network traffic rate in megabytes per second.
 
-TCP_STREAM_start_delta (sec):
+outbound_network_total (Mbytes/sec):  
+The total outbound network traffic rate in megabytes per second.
 
-TCP_MAERTS_start_delta (sec):
+TCP_STREAM_start_delta (sec):  
+The time difference in seconds between the start of the bidirectional TCP_STREAM benchmark on the sender and receiver sides.
 
-all_streams_start_delta (sec):
+TCP_MAERTS_start_delta (sec):  
+The time difference in seconds between the start of the bidirectional TCP_MAERTS benchmark on the sender and receiver sides.
+
+all_streams_start_delta (sec):  
+The time difference in seconds between the start of all bidirectional network streams on the sender and receiver sides.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)

@@ -15,57 +15,83 @@ perfkitbenchmarker.linux_benchmarks.bonnieplusplus:
 
 
 ## Metrics captured
-put_block_cpu (%s):
+put_block_cpu (%s):  
+CPU utilization percentage during the put_block operation.
 
-rewrite_cpu (%s):
+rewrite_cpu (%s):  
+CPU utilization percentage during the rewrite operation.
 
-get_block_cpu (%s):
+get_block_cpu (%s):  
+CPU utilization percentage during the get_block operation.
 
-seeks_cpu (%s):
+seeks_cpu (%s):  
+CPU utilization percentage during the seeks operation.
 
-seq_create_cpu (%s):
+seq_create_cpu (%s):  
+CPU utilization percentage during the sequential create operation.
 
-seq_del_cpu (%s):
+seq_del_cpu (%s):  
+CPU utilization percentage during the sequential delete operation.
 
-ran_create_cpu (%s):
+ran_create_cpu (%s):  
+CPU utilization percentage during the random create operation.
 
-ran_del_cpu (%s):
+ran_del_cpu (%s):  
+ utilization percentage during the random delete operation.
 
-put_block_latency (ms):
+put_block_latency (ms):  
+Latency (response time) for put_block operation, measured in milliseconds.
 
-rewrite_latency (ms):
+rewrite_latency (ms):  
+Latency for rewrite operation, measured in milliseconds.
 
-get_block_latency (ms):
+get_block_latency (ms):  
+Latency for get_block operation, measured in milliseconds.
 
-seeks_latency (ms):
+seeks_latency (ms):  
+ for seeks operation, measured in milliseconds.
 
-seq_create_latency (us):
+seq_create_latency (us):  
+Latency for sequential create operation, measured in microseconds.
 
-seq_stat_latency (us):
+seq_stat_latency (us):  
+Latency for sequential stat operation, measured in microseconds.
 
-seq_del_latency (us):
+seq_del_latency (us):  
+Latency for sequential delete operation, measured in microseconds.
 
-ran_create_latency (us):
+ran_create_latency (us):  
+Latency for random create operation, measured in microseconds.
 
-ran_stat_latency (us):
+ran_stat_latency (us):  
+Latency for random stat operation, measured in microseconds.
 
-ran_del_latency (us):
+ran_del_latency (us):  
+Latency for random delete operation, measured in microseconds.
 
-put_block (K/sec):
+put_block (K/sec):  
+Throughput (data transfer rate) for put_block operation, measured in kilobytes per second.
 
-rewrite (K/sec):
+rewrite (K/sec):  
+Throughput for rewrite operation, measured in kilobytes per second.
 
-get_block (K/sec):
+get_block (K/sec):  
+Throughput for get_block operation, measured in kilobytes per second.
 
-seeks (K/sec):
+seeks (K/sec):  
+Throughput for seeks operation, measured in kilobytes per second.
 
-seq_create (K/sec):
+seq_create (K/sec):  
+Throughput for sequential create operation, measured in kilobytes per second.
 
-seq_del (K/sec):
+seq_del (K/sec):  
+Throughput for sequential delete operation, measured in kilobytes per second.
 
-ran_create (K/sec):
+ran_create (K/sec):  
+Throughput for random create operation, measured in kilobytes per second.
 
-ran_del (K/sec):
+ran_del (K/sec):  
+Throughput for random delete operation, measured in kilobytes per second.
 
 End to end Runtime (seconds): 
 The total runtime of the test from initiation to (teardown complete?)
