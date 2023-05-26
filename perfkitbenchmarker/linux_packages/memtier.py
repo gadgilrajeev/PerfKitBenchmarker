@@ -455,12 +455,11 @@ def RunOverAllThreadsPipelinesAndClients(
 @dataclasses.dataclass(frozen=True)
 class MemtierBinarySearchParameters:
   """Parameters to aid binary search of memtier."""
-
-  lower_bound: float
-  upper_bound: float
-  pipelines: int
-  threads: int
-  clients: int
+  lower_bound: float = 0
+  upper_bound: float = math.inf
+  pipelines: int = 1
+  threads: int = 1
+  clients: int = 1
 
 
 def MeasureLatencyCappedThroughput(
@@ -477,9 +476,17 @@ def MeasureLatencyCappedThroughput(
         lower_bound=0, upper_bound=math.inf, pipelines=1, threads=1, clients=1
     )
     current_max_result = MemtierResult(
-        0, 0, 0, {'50': 0, '90': 0, '95': 0, '99': 0, '99.5': 0, '99.9': 0,
-                  '99.950': 0, '99.990': 0}, [], [], [], [], {}, {})
-    current_metadata = None
+        latency_dic={
+            '50': 0,
+            '90': 0,
+            '95': 0,
+            '99': 0,
+            '99.5': 0,
+            '99.9': 0,
+            '99.950': 0,
+            '99.990': 0,
+        },
+    )
     while parameters.lower_bound < (parameters.upper_bound - 1):
       result = _Run(
           vm=client_vm,
@@ -846,16 +853,24 @@ def GetMetadata(clients: int, threads: int, pipeline: int) -> Dict[str, Any]:
 class MemtierResult:
   """Class that represents memtier results."""
 
-  ops_per_sec: float
-  kb_per_sec: float
-  latency_ms: float
-  latency_dic: Dict[str, float]
-  get_latency_histogram: MemtierHistogram
-  set_latency_histogram: MemtierHistogram
-  timestamps: List[int]
-  ops_series: List[int]
-  latency_series: Dict[str, List[int]]
-  runtime_info: Dict[Text, Text]
+  ops_per_sec: float = 0.0
+  kb_per_sec: float = 0.0
+
+  latency_ms: float = 0.0
+  latency_dic: Dict[str, float] = dataclasses.field(default_factory=dict)
+  get_latency_histogram: MemtierHistogram = dataclasses.field(
+      default_factory=list
+  )
+  set_latency_histogram: MemtierHistogram = dataclasses.field(
+      default_factory=list
+  )
+
+  timestamps: List[int] = dataclasses.field(default_factory=list)
+  ops_series: List[int] = dataclasses.field(default_factory=list)
+  latency_series: Dict[str, List[int]] = dataclasses.field(default_factory=dict)
+
+  runtime_info: Dict[Text, Text] = dataclasses.field(default_factory=dict)
+  metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
   @classmethod
   def Parse(
@@ -920,21 +935,27 @@ class MemtierResult:
         runtime_info=runtime_info,
     )
 
-  def GetSamples(self, metadata: Dict[str, Any]) -> List[sample.Sample]:
+  def GetSamples(
+      self, metadata: Optional[Dict[str, Any]] = None
+  ) -> List[sample.Sample]:
     """Return this result as a list of samples."""
-    metadata['avg_latency'] = self.latency_ms
+    if metadata:
+      self.metadata.update(copy.deepcopy(metadata))
+    self.metadata['avg_latency'] = self.latency_ms
     for key, value in self.latency_dic.items():
-      metadata[f'p{key}_latency'] = value
+      self.metadata[f'p{key}_latency'] = value
     samples = [
-        sample.Sample('Ops Throughput', self.ops_per_sec, 'ops/s', metadata),
-        sample.Sample('KB Throughput', self.kb_per_sec, 'KB/s', metadata),
-        sample.Sample('Latency', self.latency_ms, 'ms', metadata),
+        sample.Sample(
+            'Ops Throughput', self.ops_per_sec, 'ops/s', self.metadata
+        ),
+        sample.Sample('KB Throughput', self.kb_per_sec, 'KB/s', self.metadata),
+        sample.Sample('Latency', self.latency_ms, 'ms', self.metadata),
     ]
     for name, histogram in [
         ('get', self.get_latency_histogram),
         ('set', self.set_latency_histogram),
     ]:
-      hist_meta = copy.deepcopy(metadata)
+      hist_meta = copy.deepcopy(self.metadata)
       hist_meta.update({'histogram': json.dumps(histogram)})
       samples.append(
           sample.Sample(f'{name} latency histogram', 0, '', hist_meta)
@@ -1092,6 +1113,30 @@ def AggregateMemtierResults(
             additional_metadata=metadata,
         )
     )
+  individual_latencies = collections.defaultdict(list)
+  for metric, latency_at_timestamp in latency_series.items():
+    for client_latency in latency_at_timestamp:
+      for client, latency in enumerate(client_latency):
+        if len(individual_latencies[metric]) <= client:
+          individual_latencies[metric].append([])
+        individual_latencies[metric][client].append(latency)
+
+  for metric, client_latencies in individual_latencies.items():
+    for client, latencies in enumerate(client_latencies):
+      additional_metadata = {}
+      additional_metadata.update(metadata)
+      additional_metadata['client'] = client
+      additional_metadata[sample.DISABLE_CONSOLE_LOG] = True
+      samples.append(
+          sample.CreateTimeSeriesSample(
+              latencies,
+              timestamps[0 : len(latencies)],
+              f'{metric}_time_series',
+              'ms',
+              1,
+              additional_metadata=additional_metadata,
+          )
+      )
   return samples
 
 

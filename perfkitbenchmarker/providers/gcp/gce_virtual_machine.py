@@ -82,7 +82,7 @@ INSTANCE_KNOWN_STATUSES = INSTANCE_EXISTS_STATUSES | INSTANCE_DELETED_STATUSES
 # Gcloud operations are complete when their 'status' is 'DONE'.
 OPERATION_DONE = 'DONE'
 
-# 2h timeout for LM notificaiton
+# 2h timeout for LM notification
 LM_NOTIFICATION_TIMEOUT_SECONDS = 60 * 60 * 2
 
 NVME = 'NVME'
@@ -94,7 +94,8 @@ _FAILED_TO_START_DUE_TO_PREEMPTION = (
     'Instance failed to start due to preemption.'
 )
 _GCE_VM_CREATE_TIMEOUT = 1200
-_GCE_NVIDIA_GPU_PREFIX = 'nvidia-tesla-'
+_GCE_NVIDIA_GPU_PREFIX = 'nvidia-'
+_GCE_NVIDIA_TESLA_GPU_PREFIX = 'nvidia-tesla-'
 _SHUTDOWN_SCRIPT = 'su "{user}" -c "echo | gsutil cp - {preempt_marker}"'
 METADATA_PREEMPT_URI = (
     'http://metadata.google.internal/computeMetadata/v1/instance/preempted'
@@ -118,6 +119,10 @@ class GceRetryDescribeOperationsError(Exception):
   """
 
 
+class GceWaitUntilRunningTimeoutError(Exception):
+  """Exception that is raised when WaitUntilRunning times out."""
+
+
 class GceServiceUnavailableError(Exception):
   """Error for retrying _Exists when the describe output indicates that 'The service is currently unavailable'."""
 
@@ -134,8 +139,8 @@ class GceVmSpec(virtual_machine.BaseVmSpec):
     preemptible: boolean. True if the VM should be preemptible, False otherwise.
     project: string or None. The project to create the VM in.
     image_family: string or None. The image family used to locate the image.
-    image_project: string or None. The image project used to locate the specifed
-      image.
+    image_project: string or None. The image project used to locate the
+      specified image.
     boot_disk_size: None or int. The size of the boot disk in GB.
     boot_disk_type: string or None. The type of the boot disk.
   """
@@ -175,24 +180,6 @@ class GceVmSpec(virtual_machine.BaseVmSpec):
     else:
       self.cpus = None
       self.memory = None
-
-    # The A2 machine family, unlike other GCP offerings has a preset number of
-    # GPUs, so we set them directly from the machine_type
-    # https://cloud.google.com/blog/products/compute/announcing-google-cloud-a2-vm-family-based-on-nvidia-a100-gpu
-    if self.machine_type and self.machine_type.startswith('a2-'):
-      a2_lookup = {
-          'a2-highgpu-1g': 1,
-          'a2-highgpu-2g': 2,
-          'a2-highgpu-4g': 4,
-          'a2-highgpu-8g': 8,
-          'a2-megagpu-16g': 16,
-          'a2-ultragpu-1g': 1,
-          'a2-ultragpu-2g': 2,
-          'a2-ultragpu-4g': 4,
-          'a2-ultragpu-8g': 8,
-      }
-      self.gpu_count = a2_lookup[self.machine_type]
-      self.gpu_type = virtual_machine.GPU_A100
 
   @classmethod
   def _ApplyFlags(cls, config_values, flag_values):
@@ -419,9 +406,13 @@ def GenerateAcceleratorSpecString(accelerator_type, accelerator_count):
     String to be used by gcloud to attach accelerators to a VM.
     Must be prepended by the flag '--accelerator'.
   """
-  gce_accelerator_type = (
-      FLAGS.gce_accelerator_type_override
-      or _GCE_NVIDIA_GPU_PREFIX + accelerator_type
+  gce_accelerator_type = FLAGS.gce_accelerator_type_override or (
+      (
+          _GCE_NVIDIA_TESLA_GPU_PREFIX
+          if accelerator_type in virtual_machine.TESLA_GPU_TYPES
+          else _GCE_NVIDIA_GPU_PREFIX
+      )
+      + accelerator_type
   )
   return 'type={0},count={1}'.format(gce_accelerator_type, accelerator_count)
 
@@ -501,6 +492,26 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
     self.gce_tags = vm_spec.gce_tags
     self.gce_network_tier = FLAGS.gce_network_tier
     self.gce_nic_type = FLAGS.gce_nic_type
+
+    # The A2 machine family, unlike other GCP offerings has a preset number of
+    # GPUs, so we set them directly from the machine_type
+    # https://cloud.google.com/blog/products/compute/announcing-google-cloud-a2-vm-family-based-on-nvidia-a100-gpu
+    # machine_type is always defined when running, but not in unit tests.
+    if self.machine_type and self.machine_type.startswith('a2-'):
+      a2_lookup = {
+          'a2-highgpu-1g': 1,
+          'a2-highgpu-2g': 2,
+          'a2-highgpu-4g': 4,
+          'a2-highgpu-8g': 8,
+          'a2-megagpu-16g': 16,
+          'a2-ultragpu-1g': 1,
+          'a2-ultragpu-2g': 2,
+          'a2-ultragpu-4g': 4,
+          'a2-ultragpu-8g': 8,
+      }
+      self.gpu_count = a2_lookup[self.machine_type]
+      self.gpu_type = virtual_machine.GPU_A100
+
     if not self.SupportGVNIC():
       logging.warning('Changing gce_nic_type to VIRTIO_NET')
       self.gce_nic_type = 'VIRTIO_NET'
@@ -1019,6 +1030,7 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
       poll_interval=1,
       log_errors=False,
       retryable_exceptions=(GceRetryDescribeOperationsError,),
+      timeout_exception=GceWaitUntilRunningTimeoutError
   )
   def _WaitUntilRunning(self):
     """Waits until the VM instances create command completes."""
@@ -1068,11 +1080,7 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
           name = 'local-ssd-%d' % self.local_disk_counter
           disk_number = self.local_disk_counter + 1
         elif self.ssd_interface == NVME:
-          # Device can either be /dev/nvme0n1 or /dev/nvme1n1. Find out which.
-          name, _ = self.RemoteCommand(
-              'find /dev/nvme*n%d' % (self.local_disk_counter + 1)
-          )
-          name = name.strip().split('/')[-1]
+          name = f'local-nvme-ssd-{self.local_disk_counter}'
           disk_number = self.local_disk_counter + self.NVME_START_INDEX
         else:
           raise errors.Error('Unknown Local SSD Interface.')
