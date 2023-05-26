@@ -32,7 +32,7 @@ NVIDIA_TESLA_P4 = 'p4'
 NVIDIA_TESLA_P100 = 'p100'
 NVIDIA_TESLA_V100 = 'v100'
 NVIDIA_TESLA_T4 = 't4'
-NVIDIA_TESLA_L4 = 'l4'
+NVIDIA_L4 = 'l4'
 NVIDIA_TESLA_A100 = 'a100'
 NVIDIA_TESLA_A10 = 'a10'
 
@@ -201,7 +201,7 @@ def GetGpuType(vm):
   elif 'T4' in gpu_types[0]:
     return NVIDIA_TESLA_T4
   elif 'L4' in gpu_types[0]:
-    return NVIDIA_TESLA_L4
+    return NVIDIA_L4
   elif 'A100' in gpu_types[0]:
     return NVIDIA_TESLA_A100
   elif 'A10' in gpu_types[0]:
