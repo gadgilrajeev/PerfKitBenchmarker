@@ -34,6 +34,7 @@ NVIDIA_TESLA_V100 = 'v100'
 NVIDIA_TESLA_T4 = 't4'
 NVIDIA_L4 = 'l4'
 NVIDIA_TESLA_A100 = 'a100'
+NVIDIA_H100 = 'h100'
 NVIDIA_TESLA_A10 = 'a10'
 
 EXTRACT_CLOCK_SPEEDS_REGEX = r'(\S*).*,\s*(\S*)'
@@ -206,6 +207,8 @@ def GetGpuType(vm):
     return NVIDIA_TESLA_A100
   elif 'A10' in gpu_types[0]:
     return NVIDIA_TESLA_A10
+  elif 'H100' in gpu_types[0]:
+    return NVIDIA_H100
   else:
     raise UnsupportedClockSpeedError(
         'Gpu type {0} is not supported by PKB'.format(gpu_types[0]))
@@ -474,13 +477,13 @@ def Install(vm):
   vm.Install('wget')
   tokens = re.split('/', location)
   filename = tokens[-1]
-  vm.RemoteCommand('wget {location} && chmod 755 {filename} '
-                   .format(location=location, filename=filename))
   vm.RemoteCommand(
-      'sudo ./{filename} -q -x-module-path={x_module_path} '
-      '--ui=none -x-library-path={x_library_path}'.format(
-          filename=filename,
-          x_module_path=FLAGS.nvidia_driver_x_module_path,
-          x_library_path=FLAGS.nvidia_driver_x_library_path))
+      f'wget --tries=10 {location} -O {filename} && chmod 755 {filename}'
+  )
+  vm.RobustRemoteCommand(
+      f'sudo ./{filename} -q'
+      f' -x-module-path={FLAGS.nvidia_driver_x_module_path} --ui=none'
+      f' -x-library-path={FLAGS.nvidia_driver_x_library_path}'
+  )
   if FLAGS.nvidia_driver_persistence_mode:
     EnablePersistenceMode(vm)

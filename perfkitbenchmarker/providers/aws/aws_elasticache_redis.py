@@ -22,6 +22,7 @@ from absl import flags
 from perfkitbenchmarker import errors
 from perfkitbenchmarker import managed_memory_store
 from perfkitbenchmarker import provider_info
+from perfkitbenchmarker import virtual_machine
 from perfkitbenchmarker import vm_util
 from perfkitbenchmarker.providers.aws import aws_network
 from perfkitbenchmarker.providers.aws import util
@@ -42,6 +43,9 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
   CLOUD = provider_info.AWS
   MEMORY_STORE = managed_memory_store.REDIS
 
+  # AWS Clusters can take up to 2 hours to create
+  READY_TIMEOUT = 120 * 60
+
   def __init__(self, spec):
     super(ElastiCacheRedis, self).__init__(spec)
     self.subnet_group_name = 'subnet-%s' % self.name
@@ -51,6 +55,8 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
     self.failover_zone = FLAGS.elasticache_failover_zone
     self.failover_subnet = None
     self.failover_style = FLAGS.redis_failover_style
+
+    self.subnets = []
 
   @staticmethod
   def CheckPrerequisites(benchmark_config):
@@ -128,6 +134,16 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
       self.failover_subnet.Create()
       cmd += [self.failover_subnet.id]
 
+    # Subnets determine where shards can be placed.
+    regional_network = self.spec.vms[0].network.regional_network
+    vpc_id = regional_network.vpc.id
+    for zone in self.zones:
+      cidr = regional_network.vpc.NextSubnetCidrBlock()
+      subnet = aws_network.AwsSubnet(zone, vpc_id, cidr_block=cidr)
+      subnet.Create()
+      cmd += [subnet.id]
+      self.subnets.append(subnet)
+
     vm_util.IssueCommand(cmd)
 
   def _DeleteDependencies(self):
@@ -143,6 +159,9 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
 
     if self.failover_subnet:
       self.failover_subnet.Delete()
+
+    for subnet in self.subnets:
+      subnet.Delete()
 
   def _Create(self):
     """Creates the cluster."""
@@ -182,6 +201,13 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
         cmd += ['--automatic-failover-enabled', '--num-cache-clusters', '2']
     else:
       cmd += ['--num-node-groups', str(self.node_count)]
+
+    if self.enable_tls:
+      cmd += [
+          '--transit-encryption-enabled',
+          '--transit-encryption-mode',
+          'required',
+      ]
 
     cmd += ['--tags']
     cmd += util.MakeFormattedDefaultTags()
@@ -264,3 +290,22 @@ class ElastiCacheRedis(managed_memory_store.BaseManagedMemoryStore):
       primary_endpoint = cluster_info['NodeGroups'][0]['PrimaryEndpoint']
     self._ip = primary_endpoint['Address']
     self._port = primary_endpoint['Port']
+
+  def GetShardEndpoints(
+      self, client: virtual_machine.BaseVirtualMachine
+  ) -> list[managed_memory_store.RedisShard]:
+    """See base class."""
+    shards = super().GetShardEndpoints(client)
+    shards_by_slots = {shard.slots: shard for shard in shards}
+
+    cluster_info = self.DescribeInstance()
+    # See data/elasticache_describe_cluster.txt for an example
+    node_groups = cluster_info['NodeGroups']
+    zones_by_slots = {
+        node['Slots']: node['NodeGroupMembers'][0]['PreferredAvailabilityZone']
+        for node in node_groups
+    }
+    for slot in zones_by_slots:
+      shards_by_slots[slot].zone = zones_by_slots[slot]
+
+    return list(shards_by_slots.values())

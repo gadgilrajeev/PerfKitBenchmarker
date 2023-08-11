@@ -13,3 +13,4 @@
 /elasticsearch-files
 /bash_scripts/*logs*
 /perfkit_venv
+/venv

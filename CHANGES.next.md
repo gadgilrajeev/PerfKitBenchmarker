@@ -137,6 +137,10 @@
 -   Add support for multi-NIC netperf throughput on AWS.
 -   Added AWS/GCP support for Data Plane Development Kit (DPDK) on Linux VM's to
     improve networking performance, as well as a DPDK benchmark for testpmd.
+-   Add --dpb_hardware_hourly_cost and --dpb_service_premium_hourly_cost to
+-   Add support for Spanner Postgres benchmarking with TPCC.
+    estimate cost of DPB service in benchmark runs.
+-   Add --dpb_dynamic_allocation flag to disable dynamic allocation in Spark benchmarks.
 
 ### Enhancements:
 
@@ -256,6 +260,10 @@
     GCEVirtualMachine and AWSVirtualMachine instances that are provisioned with
     asynchronous 'create' invocations.
 -   Add `--dpb_sparksql_streams` to run TPC-DS/H throughput runs.
+-   Add `--gce_create_log_http` to pass `--log-http` to `gcloud compute instance
+    create` and `gcloud compute operations describe`.
+-   Update AWS/Azure/GCP data disks to use cheap ssds rather than hdds.
+-   Support Azure ZRS disks and hyperdisk balanced.
 
 ### Bug fixes and maintenance updates:
 
@@ -386,3 +394,4 @@
 -   Cleanup Coremark compiling flags.
 -   Remove cygwin codepath.
 -   Moved flags from `pkb.py` to `flags.py` to help avoid circular dependencies.
+-   Updated tracer dstat to use pcp dstat.
