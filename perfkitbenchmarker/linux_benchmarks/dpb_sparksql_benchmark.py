@@ -162,7 +162,11 @@ def Prepare(benchmark_spec):
   """
   cluster = benchmark_spec.dpb_service
   storage_service = cluster.storage_service
+
+  start_time = time.time()
   dpb_sparksql_benchmark_helper.Prepare(benchmark_spec)
+  end_time = time.time()
+  benchmark_spec.queries_and_script_upload_time = end_time - start_time
 
   # Copy to HDFS
   if FLAGS.dpb_sparksql_data and FLAGS.dpb_sparksql_copy_to_hdfs:
@@ -196,7 +200,9 @@ def Prepare(benchmark_spec):
           'Copying tables into HDFS failed') from e
 
   # Create external Hive tables
+  benchmark_spec.hive_tables_creation_time = None
   if FLAGS.dpb_sparksql_create_hive_tables:
+    start_time = time.time()
     try:
       result = cluster.SubmitJob(
           pyspark_file='/'.join([
@@ -211,6 +217,8 @@ def Prepare(benchmark_spec):
       raise errors.Benchmarks.PrepareException(
           'Creating tables from {}/* failed'.format(
               benchmark_spec.data_dir)) from e
+    end_time = time.time()
+    benchmark_spec.hive_tables_creation_time = end_time - start_time
 
 
 def Run(benchmark_spec):
@@ -234,12 +242,13 @@ def Run(benchmark_spec):
 
   results = _GetQuerySamples(storage_service, report_dir, metadata)
   results += _GetGlobalSamples(results, cluster, job_result, metadata)
+  results += _GetPrepareSamples(benchmark_spec, metadata)
   return results
 
 
 def _GetSampleMetadata(benchmark_spec):
   """Gets metadata dict to be attached to exported benchmark samples/metrics."""
-  metadata = benchmark_spec.dpb_service.GetMetadata()
+  metadata = benchmark_spec.dpb_service.GetResourceMetadata()
   metadata['benchmark'] = dpb_sparksql_benchmark_helper.BENCHMARK_NAMES[
       FLAGS.dpb_sparksql_query]
   if FLAGS.bigquery_record_format:
@@ -372,6 +381,8 @@ def _GetGlobalSamples(
     metadata['failing_queries'] = ','.join(
         sorted(set(FLAGS.dpb_sparksql_order) - all_passing_queries))
 
+  cluster.metadata.update(metadata)
+
   # TODO(user): Compute aggregated time for each query across streams and
   # iterations.
   samples.append(
@@ -380,18 +391,39 @@ def _GetGlobalSamples(
   samples.append(
       sample.Sample('sparksql_geomean_run_time',
                     sample.GeoMean(run_times.values()), 'seconds', metadata))
-  cluster_create_time = cluster.GetClusterCreateTime()
-  if cluster_create_time is not None:
-    samples.append(
-        sample.Sample('dpb_cluster_create_time', cluster_create_time, 'seconds',
-                      metadata))
   samples.append(sample.Sample('dpb_sparksql_job_pending',
                                job_result.pending_time, 'seconds', metadata))
   if FLAGS.dpb_export_job_stats:
-    run_cost = cluster.CalculateCost()
+    run_cost = cluster.CalculateLastJobCost()
     if run_cost is not None:
       samples.append(
           sample.Sample('sparksql_run_cost', run_cost, '$', metadata))
+  return samples
+
+
+def _GetPrepareSamples(
+    benchmark_spec, metadata: MutableMapping[str, str]
+) -> list[sample.Sample]:
+  """Gets samples for Prepare stage statistics."""
+  samples = []
+  if benchmark_spec.queries_and_script_upload_time is not None:
+    samples.append(
+        sample.Sample(
+            'queries_and_script_upload_time',
+            benchmark_spec.queries_and_script_upload_time,
+            'seconds',
+            metadata,
+        )
+    )
+  if benchmark_spec.hive_tables_creation_time is not None:
+    samples.append(
+        sample.Sample(
+            'hive_tables_creation_time',
+            benchmark_spec.hive_tables_creation_time,
+            'seconds',
+            metadata,
+        )
+    )
   return samples
 
 

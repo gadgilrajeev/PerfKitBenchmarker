@@ -82,7 +82,7 @@ INSTANCE_KNOWN_STATUSES = INSTANCE_EXISTS_STATUSES | INSTANCE_DELETED_STATUSES
 # Gcloud operations are complete when their 'status' is 'DONE'.
 OPERATION_DONE = 'DONE'
 
-# 2h timeout for LM notificaiton
+# 2h timeout for LM notification
 LM_NOTIFICATION_TIMEOUT_SECONDS = 60 * 60 * 2
 
 NVME = 'NVME'
@@ -94,7 +94,8 @@ _FAILED_TO_START_DUE_TO_PREEMPTION = (
     'Instance failed to start due to preemption.'
 )
 _GCE_VM_CREATE_TIMEOUT = 1200
-_GCE_NVIDIA_GPU_PREFIX = 'nvidia-tesla-'
+_GCE_NVIDIA_GPU_PREFIX = 'nvidia-'
+_GCE_NVIDIA_TESLA_GPU_PREFIX = 'nvidia-tesla-'
 _SHUTDOWN_SCRIPT = 'su "{user}" -c "echo | gsutil cp - {preempt_marker}"'
 METADATA_PREEMPT_URI = (
     'http://metadata.google.internal/computeMetadata/v1/instance/preempted'
@@ -105,6 +106,37 @@ _METADATA_PREEMPT_CMD = (
 # Machine type to ARM architecture.
 _MACHINE_TYPE_PREFIX_TO_ARM_ARCH = {
     't2a': 'neoverse-n1',
+}
+# The A2 and A3 machine families, unlike some other GCP offerings, have a
+# preset type and number of GPUs, so we set those attributes directly from the
+# machine_type.
+_FIXED_GPU_MACHINE_TYPES = {
+    # A100 GPUs
+    # https://cloud.google.com/blog/products/compute/announcing-google-cloud-a2-vm-family-based-on-nvidia-a100-gpu
+    'a2-highgpu-1g': (virtual_machine.GPU_A100, 1),
+    'a2-highgpu-2g': (virtual_machine.GPU_A100, 2),
+    'a2-highgpu-4g': (virtual_machine.GPU_A100, 4),
+    'a2-highgpu-8g': (virtual_machine.GPU_A100, 8),
+    'a2-megagpu-16g': (virtual_machine.GPU_A100, 16),
+    'a2-ultragpu-1g': (virtual_machine.GPU_A100, 1),
+    'a2-ultragpu-2g': (virtual_machine.GPU_A100, 2),
+    'a2-ultragpu-4g': (virtual_machine.GPU_A100, 4),
+    'a2-ultragpu-8g': (virtual_machine.GPU_A100, 8),
+    # H100 GPUs
+    'a3-highgpu-1g': (virtual_machine.GPU_H100, 1),
+    'a3-highgpu-2g': (virtual_machine.GPU_H100, 2),
+    'a3-highgpu-4g': (virtual_machine.GPU_H100, 4),
+    'a3-highgpu-8g': (virtual_machine.GPU_H100, 8),
+    # L4 GPUs
+    # https://cloud.google.com/compute/docs/accelerator-optimized-machines#g2-vms
+    'g2-standard-4': (virtual_machine.GPU_L4, 1),
+    'g2-standard-8': (virtual_machine.GPU_L4, 1),
+    'g2-standard-12': (virtual_machine.GPU_L4, 1),
+    'g2-standard-16': (virtual_machine.GPU_L4, 1),
+    'g2-standard-24': (virtual_machine.GPU_L4, 2),
+    'g2-standard-32': (virtual_machine.GPU_L4, 1),
+    'g2-standard-48': (virtual_machine.GPU_L4, 4),
+    'g2-standard-96': (virtual_machine.GPU_L4, 8),
 }
 
 FIVE_MINUTE_TIMEOUT = 300
@@ -134,8 +166,8 @@ class GceVmSpec(virtual_machine.BaseVmSpec):
     preemptible: boolean. True if the VM should be preemptible, False otherwise.
     project: string or None. The project to create the VM in.
     image_family: string or None. The image family used to locate the image.
-    image_project: string or None. The image project used to locate the specifed
-      image.
+    image_project: string or None. The image project used to locate the
+      specified image.
     boot_disk_size: None or int. The size of the boot disk in GB.
     boot_disk_type: string or None. The type of the boot disk.
   """
@@ -175,24 +207,6 @@ class GceVmSpec(virtual_machine.BaseVmSpec):
     else:
       self.cpus = None
       self.memory = None
-
-    # The A2 machine family, unlike other GCP offerings has a preset number of
-    # GPUs, so we set them directly from the machine_type
-    # https://cloud.google.com/blog/products/compute/announcing-google-cloud-a2-vm-family-based-on-nvidia-a100-gpu
-    if self.machine_type and self.machine_type.startswith('a2-'):
-      a2_lookup = {
-          'a2-highgpu-1g': 1,
-          'a2-highgpu-2g': 2,
-          'a2-highgpu-4g': 4,
-          'a2-highgpu-8g': 8,
-          'a2-megagpu-16g': 16,
-          'a2-ultragpu-1g': 1,
-          'a2-ultragpu-2g': 2,
-          'a2-ultragpu-4g': 4,
-          'a2-ultragpu-8g': 8,
-      }
-      self.gpu_count = a2_lookup[self.machine_type]
-      self.gpu_type = virtual_machine.GPU_A100
 
   @classmethod
   def _ApplyFlags(cls, config_values, flag_values):
@@ -419,9 +433,13 @@ def GenerateAcceleratorSpecString(accelerator_type, accelerator_count):
     String to be used by gcloud to attach accelerators to a VM.
     Must be prepended by the flag '--accelerator'.
   """
-  gce_accelerator_type = (
-      FLAGS.gce_accelerator_type_override
-      or _GCE_NVIDIA_GPU_PREFIX + accelerator_type
+  gce_accelerator_type = FLAGS.gce_accelerator_type_override or (
+      (
+          _GCE_NVIDIA_TESLA_GPU_PREFIX
+          if accelerator_type in virtual_machine.TESLA_GPU_TYPES
+          else _GCE_NVIDIA_GPU_PREFIX
+      )
+      + accelerator_type
   )
   return 'type={0},count={1}'.format(gce_accelerator_type, accelerator_count)
 
@@ -501,6 +519,13 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
     self.gce_tags = vm_spec.gce_tags
     self.gce_network_tier = FLAGS.gce_network_tier
     self.gce_nic_type = FLAGS.gce_nic_type
+
+    # For certain machine families, we need to explicitly set the GPU type
+    # and counts. See the _FIXED_GPU_MACHINE_TYPES dictionary for more details.
+    if self.machine_type and self.machine_type in _FIXED_GPU_MACHINE_TYPES:
+      self.gpu_type = _FIXED_GPU_MACHINE_TYPES[self.machine_type][0]
+      self.gpu_count = _FIXED_GPU_MACHINE_TYPES[self.machine_type][1]
+
     if not self.SupportGVNIC():
       logging.warning('Changing gce_nic_type to VIRTIO_NET')
       self.gce_nic_type = 'VIRTIO_NET'
@@ -560,6 +585,8 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
 
     cmd = util.GcloudCommand(self, *args)
     cmd.flags['async'] = True
+    if gcp_flags.GCE_CREATE_LOG_HTTP.value:
+      cmd.flags['log-http'] = True
 
     # Compute all flags requiring alpha first. Then if any flags are different
     # between alpha and GA, we can set the appropriate ones.
@@ -629,8 +656,11 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
     if self.threads_per_core:
       cmd.flags['threads-per-core'] = self.threads_per_core
 
-    if self.gpu_count and self.machine_type and 'a2-' not in self.machine_type:
-      # A2 machine type already has predefined GPU type and count.
+    if (
+        self.gpu_count
+        and self.machine_type
+        and self.machine_type not in _FIXED_GPU_MACHINE_TYPES
+    ):
       cmd.flags['accelerator'] = GenerateAcceleratorSpecString(
           self.gpu_type, self.gpu_count
       )
@@ -882,6 +912,11 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
         raise errors.Benchmarks.UnsupportedConfigError(stderr)
       if 'The service is currently unavailable' in stderr:
         raise errors.Benchmarks.KnownIntermittentError(stderr)
+      # The initial request failed, prompting a retry, but the instance was
+      # still successfully created, which results in
+      # '409: The resource X already exists'
+      if '(gcloud.compute.instances.create) HTTPError 409' in stderr:
+        raise errors.Benchmarks.KnownIntermittentError(stderr)
       raise errors.Resource.CreationError(
           f'Failed to create VM {self.name}:\n{stderr}\nreturn code: {retcode}'
       )
@@ -1025,6 +1060,9 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
     getoperation_cmd = util.GcloudCommand(
         self, 'compute', 'operations', 'describe', self.create_operation_name
     )
+    if gcp_flags.GCE_CREATE_LOG_HTTP.value:
+      getoperation_cmd.flags['log-http'] = True
+
     stdout, _, retcode = getoperation_cmd.Issue(raise_on_failure=False)
     if retcode != 0:
       logging.info('operations describe command failed, retrying.')
@@ -1068,12 +1106,13 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
           name = 'local-ssd-%d' % self.local_disk_counter
           disk_number = self.local_disk_counter + 1
         elif self.ssd_interface == NVME:
-          # Device can either be /dev/nvme0n1 or /dev/nvme1n1. Find out which.
-          name, _ = self.RemoteCommand(
-              'find /dev/nvme*n%d' % (self.local_disk_counter + 1)
-          )
-          name = name.strip().split('/')[-1]
-          disk_number = self.local_disk_counter + self.NVME_START_INDEX
+          name = f'local-nvme-ssd-{self.local_disk_counter}'
+          # TODO(user): Apply for new Gen 3 VMs (barring M3)
+          if self.machine_type.startswith('c3'):
+            # TODO(user): Also consider removing disk_number
+            disk_number = self.local_disk_counter
+          else:  # includes N2D CVM
+            disk_number = self.local_disk_counter + self.NVME_START_INDEX
         else:
           raise errors.Error('Unknown Local SSD Interface.')
         # This is a local ssd, it does not need the regional pd flag.
@@ -1115,25 +1154,13 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
 
   def FindRemoteNVMEDevices(self, _, nvme_devices):
     """Find the paths for all remote NVME devices inside the VM."""
-    local_disks = []
-    if self.ssd_interface == NVME:
-      for local_disk_count in range(self.max_local_disks):
-        name, _ = self.RemoteCommand(f'find /dev/nvme*n{local_disk_count + 1}')
-        name = name.strip().split('/')[-1]
-        local_disk_name = '/dev/%s' % name
-        local_disks.append(local_disk_name)
-    # filter out local nvme devices from all nvme devices
     remote_nvme_devices = [
         device['DevicePath']
         for device in nvme_devices
-        if device['DevicePath'] not in local_disks
+        if device['ModelNumber'] == 'nvme_card-pd'
     ]
-    # if boot disk is nvme,
-    # remove the boot disk, which is the disk with the lowest index
-    if gce_disk.PdDriveIsNvme(self):
-      return sorted(remote_nvme_devices)[1:]
-    else:
-      return sorted(remote_nvme_devices)
+
+    return sorted(remote_nvme_devices)
 
   def UpdateDevicePath(self, scratch_disk, remote_nvme_devices):
     """Updates the paths for all remote NVME devices inside the VM."""
@@ -1342,7 +1369,7 @@ class GceVirtualMachine(virtual_machine.BaseVirtualMachine):
     }
     lm_times = self._ReadLMNoticeContents()
     if not lm_times:
-      return events_dict
+      raise ValueError('Cannot collect lm times. Live Migration might failed.')
 
     # Result may contain errors captured, so we need to skip them
     for event_info in lm_times.splitlines():

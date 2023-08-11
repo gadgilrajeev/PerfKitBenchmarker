@@ -8,9 +8,11 @@ from unittest import mock
 
 from absl import flags
 from absl.testing import flagsaver
+from perfkitbenchmarker import background_tasks
 from perfkitbenchmarker import sample
 from perfkitbenchmarker import test_util
 from perfkitbenchmarker.linux_packages import memtier
+from tests import matchers
 from tests import pkb_common_test_case
 
 FLAGS = flags.FLAGS
@@ -43,13 +45,19 @@ SET               9       100.00
 ---
 GET               0         50.0
 GET               2       100.00
+GET
 """
 
 METADATA = {
     'test': 'foobar',
+    'p50_latency': 1.215,
     'p90_latency': 2.295,
     'p95_latency': 2.319,
     'p99_latency': 2.399,
+    'p99.5_latency': 3.871,
+    'p99.9_latency': 3.872,
+    'p99.950_latency': 3.873,
+    'p99.990_latency': 3.874,
     'avg_latency': 1.54,
 }
 
@@ -345,6 +353,7 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
                 'values': [1, 1, 1, 1, 1],
                 'timestamps': [0, 1000, 2000, 3000, 4000],
                 'interval': 1,
+                'ramp_down_starts': 4000,
             },
             timestamp=0,
         ),
@@ -433,6 +442,102 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
                 'values': [1, 2, 3, 4, 5],
                 'timestamps': [0, 1000, 2000, 3000, 4000],
                 'interval': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
             },
             timestamp=0,
         ),
@@ -540,6 +645,7 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
                 'values': [1, 2, 3, 3, 3],
                 'timestamps': [0, 1000, 2000, 3000, 4000],
                 'interval': 1,
+                'ramp_down_starts': 4000,
             },
             timestamp=0,
         ),
@@ -628,6 +734,294 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
                 'values': [1, 5, 5, 4, 5],
                 'timestamps': [0, 1000, 2000, 3000, 4000],
                 'interval': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 5, 4, 3, 2],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [0, 0, 5, 4, 3],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 2,
             },
             timestamp=0,
         ),
@@ -710,6 +1104,7 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
                 'values': [2, 2, 2, 2, 2],
                 'timestamps': [0, 1000, 2000, 3000, 4000],
                 'interval': 1,
+                'ramp_down_starts': 4000,
             },
             timestamp=0,
         ),
@@ -801,7 +1196,200 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
             },
             timestamp=0,
         ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Average Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Max Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='Min Latency_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p50.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p90.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p95.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.00_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [1, 2, 3, 4, 5],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 0,
+            },
+            timestamp=0,
+        ),
+        sample.Sample(
+            metric='p99.90_time_series',
+            value=0.0,
+            unit='ms',
+            metadata={
+                'values': [5, 4, 3, 2, 1],
+                'timestamps': [0, 1000, 2000, 3000, 4000],
+                'interval': 1,
+                'client': 1,
+            },
+            timestamp=0,
+        ),
     ]
+    print(samples)
     self.assertEqual(samples, expected_result)
 
   def testParseResults_no_time_series(self):
@@ -860,46 +1448,298 @@ class MemtierTestCase(pkb_common_test_case.PkbCommonTestCase,
     samples.extend(results.GetSamples(METADATA))
     self.assertSampleListsEqualUpToTimestamp(samples, expected_result)
 
+  @flagsaver.flagsaver(num_cpus_override=16)
   def testMeasureLatencyCappedThroughput(self):
     mock_run_results = [
         # Multi-pipeline
-        GetMemtierResult(7270, 0.175),
-        GetMemtierResult(386941, 6.751),
-        GetMemtierResult(424626, 3.247),
-        GetMemtierResult(408957, 1.591),
-        GetMemtierResult(398920, 0.839),
-        GetMemtierResult(408290, 1.207),
-        GetMemtierResult(405672, 1.015),
-        GetMemtierResult(408808, 0.951),
-        GetMemtierResult(405209, 0.967),
-        GetMemtierResult(398249, 1.015),
-        GetMemtierResult(409221, 0.967),
-        GetMemtierResult(413240, 0.975),
-        GetMemtierResult(412573, 0.975),
+        GetMemtierResult(10, 10.0),
+        GetMemtierResult(20, 5.0),
+        GetMemtierResult(30, 2.0),
+        GetMemtierResult(8, 1.5),
+        GetMemtierResult(9, 0.7),
+        GetMemtierResult(3, 1.4),
+        GetMemtierResult(2, 0.8),
+        GetMemtierResult(4, 1.3),
+        GetMemtierResult(15, 0.9),
+        GetMemtierResult(7, 1.2),
+        GetMemtierResult(10, 0.9),
+        GetMemtierResult(1, 1.1),
+        GetMemtierResult(9, 0.9),
+        GetMemtierResult(30, 1.2),
         # Multi-client
-        GetMemtierResult(7433, 0.159),
-        GetMemtierResult(218505, 2.975),
-        GetMemtierResult(79875, 4.447),
-        GetMemtierResult(323469, 0.519),
-        GetMemtierResult(321503, 0.743),
-        GetMemtierResult(324469, 0.855),
-        GetMemtierResult(308853, 1.007),
-        GetMemtierResult(322717, 0.903),
-        GetMemtierResult(321258, 0.919),
-        GetMemtierResult(323695, 0.927),
-        GetMemtierResult(310044, 0.983),
+        GetMemtierResult(10, 10.0),
+        GetMemtierResult(20, 5.0),
+        GetMemtierResult(30, 2.0),
+        GetMemtierResult(8, 1.5),
+        GetMemtierResult(9, 0.7),
+        GetMemtierResult(3, 1.4),
     ]
     self.enter_context(
         mock.patch.object(memtier, '_Run', side_effect=mock_run_results))
 
-    results = memtier.MeasureLatencyCappedThroughput(None, 'unused', 0)
+    mock_vm = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    results = memtier.MeasureLatencyCappedThroughput(mock_vm, 1, 'unused', 0)
 
     actual_throughputs = []
     for s in results:
       if s.metric == 'Ops Throughput':
         actual_throughputs.append(s.value)
-    self.assertEqual(actual_throughputs, [413240, 324469])
+    self.assertEqual(actual_throughputs, [15.0, 9.0])
 
+  def testRunParallelSingleVm(self):
+    vm1 = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    connections = [
+        memtier.MemtierConnection(vm1, '10.0.1.117', 6379),
+    ]
+    mock_run_threaded = self.enter_context(
+        mock.patch.object(background_tasks, 'RunThreaded')
+    )
+
+    memtier._RunParallelConnections(connections, '0.0.0.0', 1234, 1, 2, 3)
+
+    mock_run_threaded.assert_called_once_with(
+        memtier._Run,
+        [
+            (
+                (),
+                {
+                    'vm': vm1,
+                    'server_ip': '0.0.0.0',
+                    'server_port': 1234,
+                    'threads': 1,
+                    'clients': 2,
+                    'pipeline': 3,
+                    'password': None,
+                    'unique_id': vm1.ip_address,
+                },
+            ),
+        ],
+    )
+
+  def testRunParallelMultipleVms(self):
+    vm1 = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    vm1.ip_address = 'vm1'
+    vm2 = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    vm2.ip_address = 'vm2'
+    connections = [
+        memtier.MemtierConnection(vm1, '10.0.1.117', 6379),
+        memtier.MemtierConnection(vm1, '10.0.2.104', 6379),
+        memtier.MemtierConnection(vm1, '10.0.3.217', 6379),
+        memtier.MemtierConnection(vm2, '10.0.2.177', 6379),
+        memtier.MemtierConnection(vm2, '10.0.1.174', 6379),
+        memtier.MemtierConnection(vm2, '10.0.3.6', 6379),
+    ]
+    mock_run_threaded = self.enter_context(
+        mock.patch.object(background_tasks, 'RunThreaded')
+    )
+
+    memtier._RunParallelConnections(connections, '0.0.0.0', 1234, 1, 2, 3)
+
+    mock_run_threaded.assert_called_once_with(
+        memtier._Run,
+        [
+            (
+                (),
+                {
+                    'vm': vm1,
+                    'server_ip': '0.0.0.0',
+                    'server_port': 1234,
+                    'threads': 1,
+                    'clients': 2,
+                    'pipeline': 3,
+                    'password': None,
+                    'shard_addresses': (
+                        '10.0.1.117:6379,10.0.2.104:6379,10.0.3.217:6379'
+                    ),
+                    'unique_id': 'vm1',
+                },
+            ),
+            (
+                (),
+                {
+                    'vm': vm2,
+                    'server_ip': '0.0.0.0',
+                    'server_port': 1234,
+                    'threads': 1,
+                    'clients': 2,
+                    'pipeline': 3,
+                    'password': None,
+                    'shard_addresses': (
+                        '10.0.2.177:6379,10.0.1.174:6379,10.0.3.6:6379'
+                    ),
+                    'unique_id': 'vm2',
+                },
+            ),
+        ],
+    )
+
+  @flagsaver.flagsaver(memtier_distribution_iterations=1, num_cpus_override=16)
+  def testMeasureLatencyCappedThroughputDistribution(self):
+    vm1 = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    vm1.ip_address = 'vm1'
+    vm2 = pkb_common_test_case.TestLinuxVirtualMachine(
+        pkb_common_test_case.CreateTestVmSpec()
+    )
+    vm2.ip_address = 'vm2'
+    connections = [
+        memtier.MemtierConnection(vm1, '10.0.1.117', 6379),
+        memtier.MemtierConnection(vm1, '10.0.2.104', 6379),
+        memtier.MemtierConnection(vm1, '10.0.3.217', 6379),
+        memtier.MemtierConnection(vm2, '10.0.2.177', 6379),
+        memtier.MemtierConnection(vm2, '10.0.1.174', 6379),
+        memtier.MemtierConnection(vm2, '10.0.3.6', 6379),
+    ]
+
+    mock_binary_search = self.enter_context(
+        mock.patch.object(
+            memtier,
+            '_BinarySearchForLatencyCappedThroughput',
+            return_value=[
+                memtier.MemtierResult(
+                    parameters=memtier.MemtierBinarySearchParameters(
+                        pipelines=1, threads=2, clients=3
+                    )
+                )
+            ],
+        )
+    )
+    mock_results = [
+        memtier.MemtierResult(
+            ops_per_sec=0,
+            kb_per_sec=0,
+            latency_ms=0,
+            latency_dic={'90': 0, '95': 50, '99': 1.0},
+        ),
+        memtier.MemtierResult(
+            ops_per_sec=200,
+            kb_per_sec=2,
+            latency_ms=0.2,
+            latency_dic={'90': 10, '95': 40, '99': 0.8},
+        ),
+        memtier.MemtierResult(
+            ops_per_sec=400,
+            kb_per_sec=4,
+            latency_ms=0.4,
+            latency_dic={'90': 20, '95': 30, '99': 0.6},
+        ),
+        memtier.MemtierResult(
+            ops_per_sec=600,
+            kb_per_sec=6,
+            latency_ms=0.6,
+            latency_dic={'90': 30, '95': 20, '99': 0.4},
+        ),
+        memtier.MemtierResult(
+            ops_per_sec=800,
+            kb_per_sec=8,
+            latency_ms=0.8,
+            latency_dic={'90': 40, '95': 10, '99': 0.2},
+        ),
+        memtier.MemtierResult(
+            ops_per_sec=1000,
+            kb_per_sec=10,
+            latency_ms=1.0,
+            latency_dic={'90': 50, '95': 0, '99': 0.0},
+        ),
+    ]
+    mock_run = self.enter_context(
+        mock.patch.object(
+            memtier,
+            '_RunParallelConnections',
+            return_value=mock_results,
+        )
+    )
+
+    results = memtier.MeasureLatencyCappedThroughputDistribution(
+        connections, '0.0.0.0', 1234, [vm1, vm2], 6
+    )
+
+    expected_metadata = {
+        'distribution_iterations': 1,
+        'threads': 2,
+        'clients': 3,
+        'pipelines': 1,
+    }
+
+    with self.subTest('SamplesAreCorrect'):
+      # self.assertSampleListsEqualUpToTimestamp(results, expected_samples)
+      self.assertSampleInList(
+          sample.Sample(
+              metric='Mean ops_per_sec',
+              value=500.0,
+              unit='ops/s',
+              metadata=expected_metadata,
+          ),
+          results,
+      )
+      self.assertSampleInList(
+          sample.Sample(
+              metric='Stdev kb_per_sec',
+              value=3.7416573867739413,
+              unit='KB/s',
+              metadata=expected_metadata,
+          ),
+          results,
+      )
+    with self.subTest('BinarySearchHasCorrectArgs'):
+      mock_binary_search.assert_called_once_with(
+          connections, [memtier._ClientModifier(10, 16)], '0.0.0.0', 1234, None
+      )
+    with self.subTest('RunHasCorrectArgs'):
+      mock_run.assert_has_calls(
+          [mock.call(connections, '0.0.0.0', 1234, 2, 3, 1, None)]
+      )
+
+  def testCombineResults(self):
+    result1 = memtier.MemtierResult(
+        ops_per_sec=800,
+        kb_per_sec=8,
+        latency_ms=0.8,
+        latency_dic={'90': 40, '95': 10, '99': 0.2},
+        metadata={'test_metadata': True},
+        parameters=memtier.MemtierBinarySearchParameters(lower_bound=1),
+    )
+    result2 = memtier.MemtierResult(
+        ops_per_sec=1000,
+        kb_per_sec=10,
+        latency_ms=1.0,
+        latency_dic={'90': 50, '95': 0, '99': 0.0},
+    )
+    expected_result = memtier.MemtierResult(
+        ops_per_sec=1800,
+        kb_per_sec=18,
+        latency_ms=0.9,
+        latency_dic={'90': 45, '95': 5, '99': 0.1},
+        metadata={'test_metadata': True},
+        parameters=memtier.MemtierBinarySearchParameters(lower_bound=1),
+    )
+    self.assertEqual(
+        expected_result, memtier._CombineResults([result1, result2])
+    )
+
+  @flagsaver.flagsaver(memtier_key_maximum=1000)
+  def testLoad(self):
+    vm1 = mock.Mock()
+    vm2 = mock.Mock()
+    test_vms = [vm1, vm2]
+
+    memtier.Load(test_vms, 'test_ip', 9999)
+
+    vm1.RemoteCommand.assert_called_once_with(
+        matchers.HAS('--key-minimum 1 --key-maximum 500')
+    )
+    vm2.RemoteCommand.assert_called_once_with(
+        matchers.HAS('--key-minimum 500 --key-maximum 1000')
+    )
 
 if __name__ == '__main__':
   unittest.main()

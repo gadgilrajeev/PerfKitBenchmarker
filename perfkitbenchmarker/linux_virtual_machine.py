@@ -190,6 +190,14 @@ flags.DEFINE_boolean('disable_smt', False,
                      'Whether to disable SMT (Simultaneous Multithreading) '
                      'in BIOS.')
 
+flags.DEFINE_boolean(
+    'use_numcpu_multi_files',
+    False,
+    'Whether to use /sys/fs/cgroup/cpuset.cpus.effective, '
+    '/dev/cgroup/cpuset.cpus.effective, /proc/self/status, '
+    '/proc/cpuinfo to extract the number of CPUs.',
+)
+
 _DISABLE_YUM_CRON = flags.DEFINE_boolean(
     'disable_yum_cron', True, 'Whether to disable the cron-run yum service.')
 _KERNEL_MODULES_TO_ADD = flags.DEFINE_list(
@@ -206,7 +214,7 @@ RETRYABLE_SSH_RETCODE = 255
 
 
 class CpuVulnerabilities:
-  """The 3 different vulnerablity statuses from vm.cpu_vulernabilities.
+  """The 3 different vulnerability statuses from vm.cpu_vulernabilities.
 
   Example input:
     /sys/devices/system/cpu/vulnerabilities/itlb_multihit:KVM: Vulnerable
@@ -872,30 +880,44 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
         self.port_listening_time is None):
       self.TestConnectRemoteAccessPort()
       self.port_listening_time = time.time()
-    connect_threads = [
-        (self._WaitForSshExternal, [], {}),
-        (self._WaitForSshInternal, [], {}),
-        ]
-    background_tasks.RunParallelThreads(connect_threads, len(connect_threads))
+    boot_methods = self.boot_completion_ip_subset
+    if boot_methods == virtual_machine.BootCompletionIpSubset.DEFAULT:
+      # By default let GetConnectionIp decide which IP to use for SSH.
+      # Omitting ip_address falls back to GetConnectionIp in RemoteHostCommand.
+      self._WaitForSSH()
+      # We don't know if GetConnectionIP returned an internal or external IP,
+      # so we can set neither self.ssh_external_time nor self.ssh_internal_time.
+      # It will still set self.bootable_time below.
+    elif boot_methods == virtual_machine.BootCompletionIpSubset.EXTERNAL:
+      self._WaitForSshExternal()
+    elif boot_methods == virtual_machine.BootCompletionIpSubset.INTERNAL:
+      self._WaitForSshInternal()
+    elif boot_methods == virtual_machine.BootCompletionIpSubset.BOTH:
+      connect_threads = [
+          (self._WaitForSshExternal, [], {}),
+          (self._WaitForSshInternal, [], {}),
+          ]
+      background_tasks.RunParallelThreads(connect_threads, len(connect_threads))
+    else:
+      raise ValueError('Unknown --boot_completion_ip_subset: '
+                       + self.boot_completion_ip_subset)
 
     if self.bootable_time is None:
       self.bootable_time = time.time()
 
   def _WaitForSshExternal(self):
-    if self.boot_completion_ip_subset not in (
+    assert self.boot_completion_ip_subset in (
         virtual_machine.BootCompletionIpSubset.EXTERNAL,
         virtual_machine.BootCompletionIpSubset.BOTH,
-    ):
-      return
+    )
     self._WaitForSSH(self.ip_address)
     self.ssh_external_time = time.time()
 
   def _WaitForSshInternal(self):
-    if self.boot_completion_ip_subset not in (
+    assert self.boot_completion_ip_subset in (
         virtual_machine.BootCompletionIpSubset.INTERNAL,
         virtual_machine.BootCompletionIpSubset.BOTH,
-    ):
-      return
+    )
     self._WaitForSSH(self.internal_ip)
     self.ssh_internal_time = time.time()
 
@@ -1385,11 +1407,100 @@ class BaseLinuxMixin(virtual_machine.BaseOsMixin):
     drop_caches_command = 'sudo /sbin/sysctl vm.drop_caches=3'
     self.RemoteCommand(drop_caches_command)
 
+  def _ParseNumCpus(self, cpu_list: str) -> int:
+    """Parses the cpu list string and returns the number of CPUs.
+
+    Args:
+      cpu_list: The CPU list string, e.g. 1-2,4-5
+
+    Returns:
+      The number of logical CPUs.
+      For the example with input '1-2,4-5', it returns 4.
+    """
+    if ',' in cpu_list:
+      num_cpus = 0
+      for sub_cpu_list in cpu_list.split(','):
+        num_cpus += self._ParseNumCpus(sub_cpu_list)
+      return num_cpus
+
+    if '-' in cpu_list:
+      lhs, rhs = cpu_list.split('-')
+      try:
+        lhs = int(lhs)
+        rhs = int(rhs)
+      except ValueError as exc:
+        raise ValueError(f'Invalid CPU range: [{cpu_list}]') from exc
+      if lhs > rhs:
+        raise ValueError(f'Invalid range found while parsing: [{lhs}-{rhs}]')
+
+      return rhs - lhs + 1
+
+    try:
+      int(cpu_list)
+    except ValueError as exc:
+      raise ValueError(f'Invalid cpu specified: [{cpu_list}]') from exc
+
+    return 1
+
+  def _RemoteFileExists(self, file_path: str) -> bool:
+    """Returns true if the file exists on the VM."""
+    stdout, _ = self.RemoteCommand(
+        f'ls {file_path} >> /dev/null 2>&1 || echo file_not_exist'
+    )
+    return not stdout
+
+  def _GetNumCpusFromMultiFiles(self):
+    """Extracts the number of logical CPUs from multiple files.
+
+    Extracts the number of CPUs from /sys/fs/cgroup/cpuset.cpus.effective,
+    /dev/cgroup/cpuset.cpus.effective, /proc/self/status, or /proc/cpuinfo.
+    Below are the example of their returns:
+    $ cat XX/cpuset.cpus.effective :
+          0-23
+    $ cat /proc/self/status | grep Cpus_allowed_list :
+          Cpus_allowed_list:    0-23
+    $ cat /proc/cpuinfo | grep processor | wc -l :
+          24
+
+    Returns:
+      The number of logical CPUs.
+    """
+
+    if self._RemoteFileExists('/sys/fs/cgroup/cpuset.cpus.effective'):
+      stdout, _ = self.RemoteCommand('cat /sys/fs/cgroup/cpuset.cpus.effective')
+      return self._ParseNumCpus(stdout)
+    elif self._RemoteFileExists('/proc/self/status'):
+      stdout, _ = self.RemoteCommand(
+          'cat /proc/self/status | grep Cpus_allowed_list'
+      )
+      return self._ParseNumCpus(stdout.split(':\t')[-1])
+    elif self._RemoteFileExists('/proc/cpuinfo'):
+      stdout, _ = self.RemoteCommand(
+          'cat /proc/cpuinfo | grep processor | wc -l'
+      )
+      try:
+        int(stdout)
+      except ValueError as exc:
+        raise ValueError(f'Invalid cpu specified: [{stdout}]') from exc
+      return int(stdout)
+
+    raise ValueError(
+        '_GetNumCpus failed, '
+        'cannot read /sys/fs/cgroup/cpuset.cpus.effective, '
+        '/dev/cgroup/cpuset.cpus.effective, /proc/self/status, /proc/cpuinfo.'
+    )
+
   def _GetNumCpus(self):
     """Returns the number of logical CPUs on the VM.
 
+    If the flag `use_numcpu_multi_files` is true,
+    call _GetNumCpusFromMultiFiles function to get the number of CPUs.
+    Otherwise, extracts the value from `/proc/cpuinfo` file.
     This method does not cache results (unlike "num_cpus").
     """
+    if FLAGS.use_numcpu_multi_files:
+      return self._GetNumCpusFromMultiFiles()
+
     stdout, _ = self.RemoteCommand(
         'cat /proc/cpuinfo | grep processor | wc -l')
     return int(stdout)
@@ -1861,7 +1972,7 @@ class BaseRhelMixin(BaseLinuxMixin):
   """Class holding RHEL/CentOS specific VM methods and attributes."""
 
   # In all RHEL 8+ based distros yum is an alias to dnf.
-  # dnf is backwards compatibile with yum, but has some additional capabilities
+  # dnf is backwards compatible with yum, but has some additional capabilities
   # For CentOS and RHEL 7 we override this to yum and do not pass dnf-only flags
   # The commands are similar enough that forking whole methods seemed necessary.
   # This can be removed when CentOS and RHEL 7 are no longer supported by PKB.
@@ -1869,6 +1980,9 @@ class BaseRhelMixin(BaseLinuxMixin):
 
   # OS_TYPE = os_types.RHEL
   BASE_OS_TYPE = os_types.RHEL
+
+  # RHEL's command to create a initramfs image.
+  INIT_RAM_FS_CMD = 'sudo dracut --regenerate-all -f'
 
   def OnStartup(self):
     """Eliminates the need to have a tty to run sudo commands."""
@@ -2387,11 +2501,13 @@ class Ubuntu1604Mixin(BaseUbuntuMixin, virtual_machine.DeprecatedOsMixin):
   ALTERNATIVE_OS = os_types.UBUNTU1804
 
 
-class Ubuntu1804Mixin(BaseUbuntuMixin):
+class Ubuntu1804Mixin(BaseUbuntuMixin, virtual_machine.DeprecatedOsMixin):
   """Class holding Ubuntu1804 specific VM methods and attributes."""
   OS_TYPE = os_types.UBUNTU1804
   # https://packages.ubuntu.com/bionic/python
   PYTHON_2_PACKAGE = 'python'
+  END_OF_LIFE = '2023-05-31'
+  ALTERNATIVE_OS = os_types.UBUNTU2004
 
   def UpdateEnvironmentPath(self):
     """Add /snap/bin to default search path for Ubuntu1804.
@@ -2409,14 +2525,21 @@ class Ubuntu1804EfaMixin(Ubuntu1804Mixin):
   OS_TYPE = os_types.UBUNTU1804_EFA
 
 
-# Inherit Ubuntu 18's idiosyncracies.
-# Note https://bugs.launchpad.net/snappy/+bug/1659719 is also marked not fix in
-# focal.
-class Ubuntu2004Mixin(Ubuntu1804Mixin):
+class Ubuntu2004Mixin(BaseUbuntuMixin):
   """Class holding Ubuntu2004 specific VM methods and attributes."""
   OS_TYPE = os_types.UBUNTU2004
   # https://packages.ubuntu.com/focal/python2
   PYTHON_2_PACKAGE = 'python2'
+
+  def UpdateEnvironmentPath(self):
+    """Add /snap/bin to default search path for Ubuntu2004.
+
+    See https://bugs.launchpad.net/snappy/+bug/1659719.
+    """
+    self.RemoteCommand(
+        r'sudo sed -i "1 i\export PATH=$PATH:/snap/bin" ~/.bashrc')
+    self.RemoteCommand(
+        r'sudo sed -i "1 i\export PATH=$PATH:/snap/bin" /etc/bash.bashrc')
 
 
 class Ubuntu2004EfaMixin(Ubuntu2004Mixin):

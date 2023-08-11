@@ -57,15 +57,17 @@ mlperf_inference:
           zone: westus2
           boot_disk_size: 200
 """
-_SERVER = 'Server'
-_OFFLINE = 'Offline'
+SERVER = 'Server'
+OFFLINE = 'Offline'
+SINGLESTREAM = 'SingleStream'
+MULTISTREAM = 'MultiStream'
 _SCENARIOS = flags.DEFINE_enum(
     'mlperf_inference_scenarios',
-    _SERVER,
-    [_SERVER, _OFFLINE],
-    'MLPerf has defined two different scenarios',
+    SERVER,
+    [SERVER, OFFLINE, SINGLESTREAM, MULTISTREAM],
+    'MLPerf has defined four different scenarios',
 )
-_INFERENCE_QPS = flags.DEFINE_integer(
+_TARGET_QPS = flags.DEFINE_integer(
     'mlperf_inference_qps', None, 'server target qps or offline expected qps'
 )
 _BATCH_SIZE = flags.DEFINE_integer(
@@ -75,7 +77,7 @@ _SERVER_METRIC = 'result_scheduled_samples_per_sec'
 _OFFLINE_METRIC = 'result_samples_per_second'
 _SERVER_QPS = 'server_target_qps'
 _OFFLINE_QPS = 'offline_expected_qps'
-_VALID = 'Result is : VALID'
+VALID = 'Result is : VALID'
 _INVALID = 'Result is : INVALID'
 _CUSTOM_CONFIG = 'mlperf_inference_{benchmark}_{scenario}_custom.py'
 _CUSTOM_CONFIG_PATH = 'closed/NVIDIA/configs/{benchmark}/{scenario}/custom.py'
@@ -136,11 +138,15 @@ def Prepare(bm_spec: benchmark_spec.BenchmarkSpec) -> None:
   config = (
       f'{repository}/closed/NVIDIA/configs/{benchmark}/{_SCENARIOS.value}/*.py'
   )
-  if _INFERENCE_QPS.value:
+  if _SCENARIOS.value == SERVER:
+    bm_spec.metric = _SERVER_QPS
+  elif _SCENARIOS.value == OFFLINE:
+    bm_spec.metric = _OFFLINE_QPS
+  if _TARGET_QPS.value:
     vm_util.ReplaceText(
         vm,
         f'{bm_spec.metric} = .*',
-        f'{bm_spec.metric} = {_INFERENCE_QPS.value}',
+        f'{bm_spec.metric} = {_TARGET_QPS.value}',
         config,
     )
 
@@ -282,9 +288,9 @@ def MakePerformanceSamplesFromOutput(base_metadata: Dict[str, Any],
   metadata = json.loads(output)
   metadata.update(base_metadata)
 
-  if _SCENARIOS.value == _SERVER:
+  if _SCENARIOS.value == SERVER:
     metric = _SERVER_METRIC
-  elif _SCENARIOS.value == _OFFLINE:
+  elif _SCENARIOS.value == OFFLINE:
     metric = _OFFLINE_METRIC
 
   return [
@@ -308,14 +314,9 @@ def _Run(bm_spec: benchmark_spec.BenchmarkSpec, target_qps: float) -> bool:
   vm = bm_spec.vms[0]
   config = f'configs/{FLAGS.mlperf_benchmark}/{_SCENARIOS.value}/*.py'
 
-  if _SCENARIOS.value == _SERVER:
-    metric = _SERVER_QPS
-  elif _SCENARIOS.value == _OFFLINE:
-    metric = _OFFLINE_QPS
-
   vm.RobustRemoteCommand(
-      f"{bm_spec.env_cmd} && sed -i 's/{metric} = .*/{metric} = {target_qps}/g'"
-      f' {config}'
+      f"{bm_spec.env_cmd} && sed -i 's/{bm_spec.metric} = .*/{bm_spec.metric} ="
+      f" {target_qps}/g' {config}"
   )
   # For valid log, result_validity is VALID
   # For invalid log, result_validity is INVALID
@@ -324,9 +325,9 @@ def _Run(bm_spec: benchmark_spec.BenchmarkSpec, target_qps: float) -> bool:
       'make launch_docker DOCKER_COMMAND="make run_harness RUN_ARGS=\''
       f'--benchmarks={FLAGS.mlperf_benchmark} '
       f'--scenarios={_SCENARIOS.value} --test_mode=PerformanceOnly --fast\'"')
-  if _SCENARIOS.value == _SERVER:
-    return _VALID in stdout
-  elif _SCENARIOS.value == _OFFLINE:
+  if _SCENARIOS.value == SERVER:
+    return VALID in stdout
+  elif _SCENARIOS.value == OFFLINE:
     return _INVALID in stdout
 
 
@@ -360,10 +361,10 @@ def _FindStartingQps(
     A tuple of passing QPS and failing QPS.
   """
   # T4 QPS is greater than 256 samples per second.
-  passing_qps = falling_qps = 128
+  passing_qps = falling_qps = 100
   while True:
     if _Run(bm_spec, falling_qps):
-      passing_qps, falling_qps = falling_qps, falling_qps * 2
+      passing_qps, falling_qps = falling_qps, falling_qps * 10
     else:
       logging.info('Lower QPS is %s and upper QPS is %s', passing_qps,
                    falling_qps)
@@ -383,7 +384,7 @@ def _BinarySearch(bm_spec: benchmark_spec.BenchmarkSpec) -> None:
   """
   passing_qps, falling_qps = _FindStartingQps(bm_spec)
   # Set absolute tolerance to 1
-  while not math.isclose(passing_qps, falling_qps, abs_tol=1):
+  while not math.isclose(passing_qps, falling_qps, rel_tol=0.01):
     target_qps = (passing_qps + falling_qps) / 2
     if _Run(bm_spec, target_qps):
       passing_qps = target_qps

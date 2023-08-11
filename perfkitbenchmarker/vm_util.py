@@ -110,6 +110,18 @@ flags.DEFINE_integer('ssh_server_alive_count_max', 10,
                      'wait for unresponsive servers.')
 
 
+class RetryError(Exception):
+  """Base class for retry errors."""
+
+
+class TimeoutExceededRetryError(RetryError):
+  """Exception that is raised when a retryable function times out."""
+
+
+class RetriesExceededRetryError(RetryError):
+  """Exception that is raised when a retryable function hits its retry limit."""
+
+
 class IpAddressSubset(object):
   """Enum of options for --ip_addresses."""
   REACHABLE = 'REACHABLE'
@@ -252,6 +264,12 @@ def Retry(poll_interval=POLL_INTERVAL, max_retries=MAX_RETRIES,
   Returns:
     A function that wraps functions in retry logic. It can be
         used as a decorator.
+
+  Raises:
+    TimeoutExceededRetryError - if the provided (or default) timeout is exceeded
+      while retrying the wrapped function.
+    RetriesExceededRetryError - if the provided (or default) limit on the number
+      of retry attempts is exceeded while retrying the wrapped function.
   """
   if retryable_exceptions is None:
     # TODO(user) Make retries less aggressive.
@@ -276,9 +294,10 @@ def Retry(poll_interval=POLL_INTERVAL, max_retries=MAX_RETRIES,
         except retryable_exceptions as e:
           fuzz_multiplier = 1 - fuzz + random.random() * fuzz
           sleep_time = poll_interval * fuzz_multiplier
-          if ((time.time() + sleep_time) >= deadline or
-              (max_retries >= 0 and tries > max_retries)):
-            raise
+          if (time.time() + sleep_time) >= deadline:
+            raise TimeoutExceededRetryError() from e
+          elif max_retries >= 0 and tries > max_retries:
+            raise RetriesExceededRetryError() from e
           else:
             if log_errors:
               logging.info('Retrying exception running %s: %s', f.__name__, e)
@@ -364,8 +383,6 @@ def IssueCommand(
     raise ValueError(
         f'Command must be a list of strings, but string {cmd} was received')
   full_cmd = ' '.join(str(w) for w in cmd)
-  if should_pre_log:
-    logging.info('Running: %s', full_cmd, stacklevel=stack_level)
   if '; ' in full_cmd:
     logging.warning(
         (
@@ -394,6 +411,8 @@ def IssueCommand(
           ',  WallTime:%Es,  CPU:%Us,  MaxMemory:%Mkb '
       ] + list(cmd)
 
+    if should_pre_log:
+      logging.info('Running: %s', full_cmd, stacklevel=stack_level)
     try:
       process = subprocess.Popen(cmd_to_use, env=env, shell=shell_value,
                                  stdin=subprocess.PIPE, stdout=tf_out,
