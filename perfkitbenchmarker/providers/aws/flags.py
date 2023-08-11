@@ -56,18 +56,10 @@ flags.DEFINE_string('aws_image_name_regex', None,
                     'IMAGE_NAME_REGEX.')
 flags.DEFINE_string('aws_preprovisioned_data_bucket', None,
                     'AWS bucket where pre-provisioned data has been copied.')
-flags.DEFINE_string(
+ELASTICACHE_NODE_TYPE = flags.DEFINE_string(
     'elasticache_node_type',
     'cache.m4.large',
     'The AWS cache node type to use for elasticache clusters.',
-)
-flags.DEFINE_integer(
-    'elasticache_node_count',
-    1,
-    (
-        'Number of cache nodes (shards) to use. Only used if '
-        'managed_memory_store_cluster is True.'
-    ),
 )
 flags.DEFINE_string(
     'elasticache_failover_zone', None, 'AWS elasticache failover zone'
@@ -132,4 +124,12 @@ flags.DEFINE_integer(
     'Sets how many files will be crawled in each leaf directory. If left '
     'unset, all the files will be crawled. May range from 1 to 249.',
     1, 249
+)
+# TODO(user): Create a spec for aurora.
+AURORA_STORAGE_TYPE = flags.DEFINE_enum(
+    'aws_aurora_storage_type',
+    'aurora',
+    ['aurora', 'aurora-iopt1'],
+    'Aurora storage type to use, corresponds to different modes of billing. See'
+    ' https://aws.amazon.com/rds/aurora/pricing/.',
 )

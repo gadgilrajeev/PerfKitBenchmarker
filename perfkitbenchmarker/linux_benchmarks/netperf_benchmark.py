@@ -251,7 +251,8 @@ def _HistogramStatsCalculator(histogram, percentiles=PERCENTILES):
   by_value = sorted([(value, count) for value, count in histogram.items()],
                     key=lambda x: x[0])
   total_count = sum(histogram.values())
-
+  if total_count == 0:
+    return stats
   cur_value_index = 0  # Current index in by_value
   cur_index = 0  # Number of values we've passed so far
   for p in percentiles:
@@ -503,7 +504,31 @@ def RunNetperf(vm, benchmark_name, server_ips, num_streams):
   if len(parsed_output) == 1:
     # Only 1 netperf thread
     throughput_sample, latency_samples, histogram = parsed_output[0]
-    return samples + [throughput_sample] + latency_samples
+    latency_histogram = collections.Counter()
+    latency_histogram.update(histogram)
+    # Netperf already outputs p50/p90/p99
+    latency_stats = _HistogramStatsCalculator(latency_histogram, [10, 99.9])
+    for stat, value in latency_stats.items():
+      latency_samples.append(
+          sample.Sample(
+              f'{benchmark_name}_Latency_{stat}',
+              float(value),
+              'us',
+              throughput_sample.metadata,
+          )
+      )
+    output_samples = samples + [throughput_sample] + latency_samples
+    # Create formatted output for TCP stream throughput metrics
+    if benchmark_name.upper() == 'TCP_STREAM':
+      output_samples.append(
+          sample.Sample(
+              throughput_sample.metric + '_1stream',
+              throughput_sample.value,
+              throughput_sample.unit,
+              throughput_sample.metadata,
+          )
+      )
+    return output_samples
   else:
     # Multiple netperf threads
     # Unzip parsed output
@@ -527,6 +552,17 @@ def RunNetperf(vm, benchmark_name, server_ips, num_streams):
       samples.append(
           sample.Sample(f'{benchmark_name}_Throughput_{stat}', float(value),
                         throughput_unit, metadata))
+    # Create formatted output, following {benchmark_name}_Throughput_Xstream(s)
+    # for TCP stream throughput metrics
+    if benchmark_name.upper() == 'TCP_STREAM':
+      samples.append(
+          sample.Sample(
+              f'{benchmark_name}_Throughput_{len(parsed_output)}streams',
+              throughput_stats['total'],
+              throughput_unit,
+              metadata,
+          )
+      )
     if enable_latency_histograms:
       # Combine all of the latency histogram dictionaries
       latency_histogram = collections.Counter()

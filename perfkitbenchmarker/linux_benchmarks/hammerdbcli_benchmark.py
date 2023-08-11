@@ -1,4 +1,4 @@
-"""Runs Hammerdb cli using scripts provided by CloudSQL team."""
+"""Runs the HammerDB relational database benchmark."""
 import posixpath
 from typing import Any, Dict, List
 
@@ -12,6 +12,7 @@ from perfkitbenchmarker import sql_engine_utils
 from perfkitbenchmarker import virtual_machine
 
 from perfkitbenchmarker.linux_packages import hammerdb
+from perfkitbenchmarker.providers.gcp import gcp_alloy_db  # pylint: disable=unused-import
 
 # MYSQL Config file path
 MYSQL_CONFIG_PATH = '/etc/mysql/mysql.conf.d/mysqld.cnf'
@@ -110,10 +111,6 @@ def GetConfig(user_config: Dict[Any, Any]) -> Dict[Any, Any]:
   Returns:
     loaded benchmark configuration
   """
-  if FLAGS.db_engine and 'sqlserver' in FLAGS.db_engine:
-    raise ValueError(
-        'Please use Windows Client for SQL server benchmarking on Hammerdb.'
-    )
   return configs.LoadConfig(BENCHMARK_CONFIG, user_config, BENCHMARK_NAME)
 
 
@@ -149,14 +146,14 @@ def Prepare(benchmark_spec: bm_spec.BenchmarkSpec):
     )
 
   hammerdb.SetupConfig(
-      vm,
-      db_engine,
-      hammerdb.HAMMERDB_SCRIPT.value,
-      relational_db.endpoint,
-      relational_db.port,
-      relational_db.spec.database_password,
-      relational_db.spec.database_username,
-      FLAGS.cloud == 'Azure' and FLAGS.use_managed_db,
+      vm=vm,
+      db_engine=db_engine,
+      hammerdb_script=hammerdb.HAMMERDB_SCRIPT.value,
+      ip=relational_db.endpoint,
+      port=relational_db.port,
+      password=relational_db.spec.database_password,
+      user=relational_db.spec.database_username,
+      is_managed_azure=(FLAGS.cloud == 'Azure' and FLAGS.use_managed_db),
   )
 
   if (

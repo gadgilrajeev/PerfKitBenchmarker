@@ -36,6 +36,7 @@ from perfkitbenchmarker import context
 from perfkitbenchmarker import data
 from perfkitbenchmarker import errors
 from perfkitbenchmarker import resource
+from perfkitbenchmarker import sample
 from perfkitbenchmarker import units
 from perfkitbenchmarker import vm_util
 from perfkitbenchmarker.linux_packages import hadoop
@@ -93,7 +94,7 @@ flags.DEFINE_string(
 )
 flags.DEFINE_bool(
     'dpb_export_job_stats', False,
-    'Exports job stats such as CPU usage and cost. Enabled by default, but not '
+    'Exports job stats such as CPU usage and cost. Disabled by default and not '
     'necessarily implemented on all services.')
 flags.DEFINE_enum(
     'dpb_job_type',
@@ -109,6 +110,23 @@ flags.DEFINE_enum(
     ],
     'The type of the job to be run on the backends.',
 )
+_HARDWARE_HOURLY_COST = flags.DEFINE_float(
+    'dpb_hardware_hourly_cost', None,
+    'Hardware hourly USD cost of running the DPB cluster. Set it along with '
+    '--dpb_service_premium_hourly_cost to publish cost estimate metrics.'
+)
+_SERVICE_PREMIUM_HOURLY_COST = flags.DEFINE_float(
+    'dpb_service_premium_hourly_cost', None,
+    'Hardware hourly USD cost of running the DPB cluster. Set it along with '
+    '--dpb_hardware_hourly_cost to publish cost estimate metrics.'
+)
+_DYNAMIC_ALLOCATION = flags.DEFINE_bool(
+    'dpb_dynamic_allocation', True,
+    'True by default. Set it to False to disable dynamic allocation and assign '
+    'all cluster executors to an incoming job. Setting this off is only '
+    'supported by Dataproc and EMR (non-serverless versions).'
+)
+
 
 FLAGS = flags.FLAGS
 
@@ -180,6 +198,8 @@ class BaseDpbService(resource.BaseResource):
   GCS_FS = 'gs'
   S3_FS = 's3'
 
+  SUPPORTS_NO_DYNALLOC = False
+
   # Job types that are supported on the dpb service backends
   PYSPARK_JOB_TYPE = _PYSPARK_JOB_TYPE
   SPARKSQL_JOB_TYPE = _SPARKSQL_JOB_TYPE
@@ -221,9 +241,17 @@ class BaseDpbService(resource.BaseResource):
       self.bucket = 'pkb-' + FLAGS.run_uri
       self.manage_bucket = True
     self.dpb_service_zone = FLAGS.dpb_service_zone
-    self.dpb_version = dpb_service_spec.version
-    self.dpb_service_type = 'unknown'
+    self.dpb_service_type = self.SERVICE_TYPE
     self.storage_service = None
+    if not self.SUPPORTS_NO_DYNALLOC and not _DYNAMIC_ALLOCATION.value:
+      raise errors.Setup.InvalidFlagConfigurationError(
+          'Dynamic allocation off is not supported for the current DPB '
+          f'Service: {type(self).__name__}.'
+      )
+    self._InitializeMetadata()
+
+  def GetDpbVersion(self) -> Optional[str]:
+    return self.spec.version
 
   @property
   def base_dir(self):
@@ -374,10 +402,9 @@ class BaseDpbService(resource.BaseResource):
         job_type=BaseDpbService.HADOOP_JOB_TYPE,
         properties=properties)
 
-  def GetMetadata(self):
-    """Return a dictionary of the metadata for this cluster."""
-    pretty_version = self.dpb_version or 'default'
-    basic_data = {
+  def _InitializeMetadata(self) -> None:
+    pretty_version = self.GetDpbVersion()
+    self.metadata = {
         'dpb_service':
             self.dpb_service_type,
         'dpb_version':
@@ -399,10 +426,9 @@ class BaseDpbService(resource.BaseResource):
         'dpb_job_properties':
             ','.join('{}={}'.format(k, v)
                      for k, v in self.GetJobProperties().items()),
-        'dpb_cluster_properties':
-            ','.join(FLAGS.dpb_cluster_properties),
+        'dpb_cluster_properties': ','.join(self.GetClusterProperties()),
+        'dpb_dynamic_allocation': _DYNAMIC_ALLOCATION.value,
     }
-    return basic_data
 
   def _CreateDependencies(self):
     """Creates a bucket to use with the cluster."""
@@ -443,6 +469,25 @@ class BaseDpbService(resource.BaseResource):
     if start_time > end_time:
       raise ValueError('start_time cannot be later than the end_time')
     return (end_time - start_time).total_seconds()
+
+  def GetClusterProperties(self) -> list[str]:
+    """Gets cluster props in the format of the dpb_cluster_properties flag.
+
+    Note that this might return an empty list if both --dpb_dynamic_allocation
+    and --dpb_cluster_properties are unset.
+
+    Returns:
+      A list of cluster properties, with each element being in the same format
+      the --dpb_cluster_properties flag uses.
+    """
+    properties = []
+    if not _DYNAMIC_ALLOCATION.value:
+      properties.extend([
+          'spark:spark.executor.instances=9999',
+          'spark:spark.dynamicAllocation.enabled=false',
+      ])
+    properties.extend(FLAGS.dpb_cluster_properties)
+    return properties
 
   def GetJobProperties(self) -> Dict[str, str]:
     """Parse the dpb_job_properties_flag."""
@@ -486,12 +531,122 @@ class BaseDpbService(resource.BaseResource):
     """Gets service wrapper scripts to upload alongside benchmark scripts."""
     return []
 
-  def CalculateCost(self) -> Optional[float]:
+  def CalculateLastJobCost(self) -> Optional[float]:
     """Returns the cost of last job submitted.
 
     Returns:
       A float representing the cost in dollars or None if not implemented.
     """
+    return None
+
+  def GetClusterDuration(self) -> Optional[float]:
+    """Gets how much time the cluster has been running in seconds.
+
+    This default implementation just returns None. Override in subclasses if
+    needed.
+
+    Returns:
+      A float representing the number of seconds the cluster has been running or
+      None if it cannot be obtained.
+    """
+    return None
+
+  def GetClusterCost(self) -> Optional[float]:
+    """Gets the cost of running the cluster if applicable.
+
+    Default implementation returns the sum of cluster hardware cost and service
+    premium cost.
+
+    Guaranteed to be called after the cluster has been shut down if applicable.
+
+    Returns:
+      A float representing the cost in dollars or None if not implemented.
+    """
+    hardware_cost = self.GetClusterHardwareCost()
+    premium_cost = self.GetClusterPremiumCost()
+    if hardware_cost is None or premium_cost is None:
+      return None
+    return hardware_cost + premium_cost
+
+  def GetClusterHardwareCost(self) -> Optional[float]:
+    """Computes the hardware cost with --dpb_hardware_hourly_cost value.
+
+    Default implementation multiplies --dpb_hardware_hourly_cost with the value
+    returned by GetClusterDuration().
+
+    Returns:
+      A float representing the cost in dollars or None if not implemented.
+    """
+    # pylint: disable-next=assignment-from-none
+    cluster_duration = self.GetClusterDuration()
+    if cluster_duration is None or _HARDWARE_HOURLY_COST.value is None:
+      return None
+    return cluster_duration / 3600 * _HARDWARE_HOURLY_COST.value
+
+  def GetClusterPremiumCost(self) -> Optional[float]:
+    """Computes the premium cost with --dpb_service_premium_hourly_cost value.
+
+    Default implementation multiplies --dpb_service_premium_hourly_cost with the
+    value returned by GetClusterDuration().
+
+    Returns:
+      A float representing the cost in dollars or None if not implemented.
+    """
+    # pylint: disable-next=assignment-from-none
+    cluster_duration = self.GetClusterDuration()
+    if cluster_duration is None or _SERVICE_PREMIUM_HOURLY_COST.value is None:
+      return None
+    return cluster_duration / 3600 * _SERVICE_PREMIUM_HOURLY_COST.value
+
+  def GetSamples(self) -> list[sample.Sample]:
+    """Gets samples with service statistics."""
+    samples = []
+    metrics: dict[str, tuple[Optional[float], str]] = {
+        'dpb_cluster_create_time': (self.GetClusterCreateTime(), 'seconds'),
+        'dpb_cluster_duration': (self.GetClusterDuration(), 'seconds'),
+        'dpb_cluster_hardware_cost': (self.GetClusterHardwareCost(), '$'),
+        'dpb_cluster_premium_cost': (self.GetClusterPremiumCost(), '$'),
+        'dpb_cluster_total_cost': (self.GetClusterCost(), '$'),
+        'dpb_cluster_hardware_hourly_cost': (
+            _HARDWARE_HOURLY_COST.value,
+            '$/hour',
+        ),
+        'dpb_cluster_premium_hourly_cost': (
+            _SERVICE_PREMIUM_HOURLY_COST.value,
+            '$/hour',
+        ),
+    }
+    for metric, value_unit_tuple in metrics.items():
+      value, unit = value_unit_tuple
+      if value is not None:
+        samples.append(
+            sample.Sample(metric, value, unit, self.GetResourceMetadata())
+        )
+    return samples
+
+
+class DpbServiceServerlessMixin:
+  """Mixin with default methods dpb services without managed infrastructure."""
+
+  def _Create(self) -> None:
+    pass
+
+  def _Delete(self) -> None:
+    pass
+
+  def GetClusterCreateTime(self) -> Optional[float]:
+    return None
+
+  def GetClusterDuration(self) -> Optional[float]:
+    return None
+
+  def GetClusterCost(self) -> Optional[float]:
+    return None
+
+  def GetClusterHardwareCost(self) -> Optional[float]:
+    return None
+
+  def GetClusterPremiumCost(self) -> Optional[float]:
     return None
 
 
@@ -574,11 +729,10 @@ class UnmanagedDpbServiceYarnCluster(UnmanagedDpbService):
 
   def __init__(self, dpb_service_spec):
     super(UnmanagedDpbServiceYarnCluster, self).__init__(dpb_service_spec)
-    #  Dictionary to hold the cluster vms.
-    self.dpb_service_type = UNMANAGED_DPB_SVC_YARN_CLUSTER
-    # Set DPB version as Hadoop version for metadata
-    self.dpb_version = hadoop.HadoopVersion()
     self.cloud = dpb_service_spec.worker_group.cloud
+
+  def GetDpbVersion(self) -> Optional[str]:
+    return str(hadoop.HadoopVersion())
 
   def _Create(self):
     """Create an un-managed yarn cluster."""
@@ -665,10 +819,10 @@ class UnmanagedDpbSparkCluster(UnmanagedDpbService):
     super(UnmanagedDpbSparkCluster, self).__init__(dpb_service_spec)
     #  Dictionary to hold the cluster vms.
     self.vms = {}
-    self.dpb_service_type = UNMANAGED_SPARK_CLUSTER
-    # Set DPB version as Spark version for metadata
-    self.dpb_version = f'spark_{spark.SparkVersion()}'
     self.cloud = dpb_service_spec.worker_group.cloud
+
+  def GetDpbVersion(self) -> Optional[str]:
+    return f'spark_{spark.SparkVersion()}'
 
   def _Create(self):
     """Create an un-managed yarn cluster."""
@@ -755,9 +909,6 @@ class KubernetesSparkCluster(BaseDpbService):
 
   def __init__(self, dpb_service_spec):
     super().__init__(dpb_service_spec)
-    self.dpb_service_type = self.SERVICE_TYPE
-    # Set DPB version as Spark version for metadata
-    self.dpb_version = 'spark_' + FLAGS.spark_version
 
     benchmark_spec = context.GetThreadBenchmarkSpec()
     self.k8s_cluster = benchmark_spec.container_cluster
@@ -794,6 +945,9 @@ class KubernetesSparkCluster(BaseDpbService):
       raise errors.Config.InvalidValue(
           f'Cluster type {KUBERNETES_SPARK_CLUSTER} requires at least 2 nodes.'
           f'Found {self.k8s_cluster.num_nodes}.')
+
+  def GetDpbVersion(self) -> Optional[str]:
+    return 'spark_' + FLAGS.spark_version
 
   def _Create(self):
     """Create docker image for cluster."""
@@ -941,8 +1095,6 @@ class KubernetesFlinkCluster(BaseDpbService):
 
   def __init__(self, dpb_service_spec):
     super().__init__(dpb_service_spec)
-    self.dpb_service_type = self.SERVICE_TYPE
-    self.dpb_version = dpb_service_spec.version or self.DEFAULT_FLINK_IMAGE
 
     benchmark_spec = context.GetThreadBenchmarkSpec()
     self.k8s_cluster = benchmark_spec.container_cluster
@@ -969,6 +1121,9 @@ class KubernetesFlinkCluster(BaseDpbService):
       raise errors.Config.InvalidValue(
           f'Cluster type {KUBERNETES_FLINK_CLUSTER} requires at least 2 nodes.'
           f'Found {self.k8s_cluster.num_nodes}.')
+
+  def GetDpbVersion(self) -> Optional[str]:
+    return self.spec.version or self.DEFAULT_FLINK_IMAGE
 
   def _CreateConfigMapDir(self):
     """Returns a TemporaryDirectory containing files in the ConfigMap."""
@@ -1016,7 +1171,7 @@ class KubernetesFlinkCluster(BaseDpbService):
       FLAGS.container_remote_build_config = self._GenerateConfig(
           'docker/flink/cloudbuild.yaml.j2',
           dpb_job_jarfile=FLAGS.dpb_job_jarfile,
-          base_image=self.dpb_version,
+          base_image=self.GetDpbVersion(),
           full_tag=self.container_registry.GetFullRegistryTag(self.image),
       )
     self.image = self.container_registry.GetOrBuild(self.image)

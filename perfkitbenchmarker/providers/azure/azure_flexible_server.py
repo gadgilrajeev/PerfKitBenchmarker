@@ -31,7 +31,7 @@ DEFAULT_DATABASE_NAME = 'database'
 FLAGS = flags.FLAGS
 
 DISABLE_HA = 'Disabled'
-ENABLE_HA = 'Enabled'
+ENABLE_HA = 'SameZone'
 
 DEFAULT_MYSQL_VERSION = '8.0'
 DEFAULT_POSTGRES_VERSION = '13'
@@ -154,8 +154,6 @@ class AzureFlexibleServer(azure_relational_db.AzureRelationalDb):
         '255.255.255.255',
     ]
     vm_util.IssueCommand(cmd)
-    self._AssignEndpointForWriterInstance()
-    self.client_vm_query_tools.InstallPackages()
 
   def SetDbConfiguration(self, name: str, value: str) -> Tuple[str, str, int]:
     """Set configuration for the database instance.

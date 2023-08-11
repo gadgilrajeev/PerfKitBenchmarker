@@ -54,7 +54,13 @@ RDP_PORT = 3389
 # This startup script enables remote mangement of the instance. It does so
 # by creating a WinRM listener (using a self-signed cert) and opening
 # the WinRM port in the Windows firewall.
+# This script also disables the windows defender to avoid
+# interferring with the benchmarks
 _STARTUP_SCRIPT = """
+New-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name 'EnableLUA' -Value 0 -PropertyType DWORD -Force
+Set-MpPreference -DisableRealtimeMonitoring $true
+Set-MpPreference -DisableBehaviorMonitoring $true
+Set-MpPreference -DisableBlockAtFirstSeen $true
 Enable-PSRemoting -Force
 $cert = New-SelfSignedCertificate -DnsName hostname -CertStoreLocation `
     Cert:\\LocalMachine\\My\\
@@ -401,7 +407,7 @@ class BaseWindowsMixin(virtual_machine.BaseOsMixin):
     self.home_dir = stdout.strip()
     stdout, _ = self.RemoteCommand('echo $env:SystemDrive')
     self.system_drive = stdout.strip()
-    self.RemoteCommand('mkdir %s' % self.temp_dir)
+    self.RemoteCommand('mkdir %s -Force' % self.temp_dir)
     self.DisableGuestFirewall()
 
   def _Reboot(self):
@@ -450,6 +456,20 @@ class BaseWindowsMixin(virtual_machine.BaseOsMixin):
       self.Uninstall(package_name)
     self.RemoteCommand('rm -recurse -force %s' % self.temp_dir)
     self.EnableGuestFirewall()
+
+  def GetSha256sum(self, path, filename):
+    """Gets the sha256sum hash for a filename in a path on the VM.
+
+    Args:
+      path: string; Path on the VM.
+      filename: string; Name of the file in the path.
+
+    Returns:
+      string; The sha256sum hash.
+    """
+    file_path = ntpath.join(path, filename)
+    stdout, _ = self.RemoteCommand(f'certUtil -hashfile {file_path} SHA256')
+    return stdout.splitlines()[1]
 
   def WaitForProcessRunning(self, process, timeout):
     """Blocks until either the timeout passes or the process is running.
@@ -601,10 +621,16 @@ class BaseWindowsMixin(virtual_machine.BaseOsMixin):
     # mounted, format the volume, and assign the mount point to the volume.
     if disk_spec.mount_point:
       self.RemoteCommand('mkdir %s' % disk_spec.mount_point)
-      script += ('format quick\n'
+      format_command = 'format quick'
+
+      if self.OS_TYPE in os_types.WINDOWS_SQLSERVER_OS_TYPES:
+        format_command = 'format fs=ntfs quick unit=64k'
+
+      script += ('%s\n'
                  'assign letter=%s\n'
                  'assign mount=%s\n' %
-                 (ATTACHED_DISK_LETTER.lower(), disk_spec.mount_point))
+                 (format_command, ATTACHED_DISK_LETTER.lower(),
+                  disk_spec.mount_point))
 
     self._RunDiskpartScript(script)
 
