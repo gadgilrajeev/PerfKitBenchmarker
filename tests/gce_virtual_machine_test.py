@@ -746,9 +746,10 @@ class GCEVMCreateTestCase(pkb_common_test_case.PkbCommonTestCase):
               'memory': '1.0GiB',
           })
       vm = pkb_common_test_case.TestGceVirtualMachine(spec)
-      with self.assertRaises(
-          errors.Benchmarks.QuotaFailure.RateLimitExceededError):
+      with self.assertRaises(vm_util.RetriesExceededRetryError) as e:
         vm._Create()
+      self.assertIs(type(e.exception.__cause__),
+                    errors.Benchmarks.QuotaFailure.RateLimitExceededError)
       self.assertEqual(issue_command.call_count,
                        util.RATE_LIMITED_MAX_RETRIES + 1)
 
@@ -830,6 +831,14 @@ class GCEVMCreateTestCase(pkb_common_test_case.PkbCommonTestCase):
           'fake_stderr':
               ('ERROR: (gcloud.compute.instances.create) Could not fetch'
                'resource:\n - The service is currently unavailable.'),
+          'expected_error': errors.Benchmarks.KnownIntermittentError
+      }, {
+          'testcase_name':
+              'duplicate_create_request',
+          'fake_stderr':
+              ('ERROR: (gcloud.compute.instances.create) HTTPError 409: '
+               'The resource "projects/control-plane-tests/zones/europe-west6-b/'
+               'instances/pkb-5b778a551293-0" already exists'),
           'expected_error': errors.Benchmarks.KnownIntermittentError
       })
   def testCreateVMErrorCases(self, fake_stderr, expected_error):

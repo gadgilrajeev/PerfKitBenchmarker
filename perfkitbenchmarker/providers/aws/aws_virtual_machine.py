@@ -23,6 +23,7 @@ import base64
 import collections
 import json
 import logging
+import ntpath
 import posixpath
 import re
 import threading
@@ -1033,6 +1034,8 @@ class AwsVirtualMachine(virtual_machine.BaseVirtualMachine):
         raise errors.Benchmarks.QuotaFailure(stderr)
     if 'InternalError' in stderr:
       raise errors.Resource.CreationInternalError(stderr)
+    if 'InvalidKeyPair.NotFound' in stderr:
+      raise errors.Benchmarks.KnownIntermittentError(stderr)
 
     # When launching more than 1 VM into the same placement group, there is an
     # occasional error that the placement group has already been used in a
@@ -1043,7 +1046,7 @@ class AwsVirtualMachine(virtual_machine.BaseVirtualMachine):
       raise errors.Benchmarks.UnsupportedConfigError(stderr)
     if retcode:
       raise errors.Resource.CreationError(
-          'Failed to create VM: %s return code: %s' % (retcode, stderr))
+          'Failed to create VM: %s return code: %s' % (stderr, retcode))
     if not self.create_return_time:
       self.create_return_time = time.time()
 
@@ -1804,6 +1807,41 @@ class BaseWindowsAwsVirtualMachine(AwsVirtualMachine,
     super(BaseWindowsAwsVirtualMachine, self).__init__(vm_spec)
     self.user_data = ('<powershell>%s</powershell>' %
                       windows_virtual_machine.STARTUP_SCRIPT)
+
+  def DownloadPreprovisionedData(
+      self, install_path, module_name, filename,
+      timeout=FIVE_MINUTE_TIMEOUT
+  ):
+    """Downloads a data file from an AWS S3 bucket with pre-provisioned data.
+
+    Use --aws_preprovisioned_data_bucket to specify the name of the bucket.
+
+    Args:
+      install_path: The install path on this VM.
+      module_name: Name of the module associated with this data file.
+      filename: The name of the file that was downloaded.
+      timeout: Timeout value for downloading preprovisionedData, Five minutes
+      by default.
+    """
+    # TODO(deitz): Add retry logic.
+    temp_local_path = vm_util.GetTempDir()
+    vm_util.IssueCommand(
+        GenerateDownloadPreprovisionedDataCommand(
+            temp_local_path, module_name, filename
+        ).split(' '),
+        timeout=timeout,
+    )
+    self.PushFile(
+        vm_util.PrependTempDir(filename),
+        ntpath.join(install_path, filename)
+    )
+    vm_util.IssueCommand(['rm', vm_util.PrependTempDir(filename)])
+
+  def ShouldDownloadPreprovisionedData(self, module_name, filename):
+    """Returns whether or not preprovisioned data is available."""
+    return FLAGS.aws_preprovisioned_data_bucket and vm_util.IssueCommand(
+        GenerateStatPreprovisionedDataCommand(
+            module_name, filename).split(' '), raise_on_failure=False)[-1] == 0
 
   @vm_util.Retry()
   def _GetDecodedPasswordData(self):

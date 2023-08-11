@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import time
+from typing import Any, Optional
 
 from absl import flags
 from google.cloud import monitoring_v3
@@ -37,6 +38,8 @@ BASIC_TIER = 'BASIC'
 COMMAND_TIMEOUT = 1200  # 20 minutes
 DEFAULT_PORT = 6379
 
+_SHARD_SIZE_GB = 13
+
 
 class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
   """Object representing a GCP cloud redis instance."""
@@ -47,24 +50,39 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
   def __init__(self, spec):
     super(CloudRedis, self).__init__(spec)
     self.project = FLAGS.project
-    self.size = FLAGS.gcp_redis_gb
+    self.size = gcp_flags.REDIS_GB.value
+    if self._clustered:
+      self.size = self.node_count * _SHARD_SIZE_GB
     self.redis_region = FLAGS.cloud_redis_region
     self.redis_version = spec.config.cloud_redis.redis_version
     self.failover_style = FLAGS.redis_failover_style
-    if self.failover_style == managed_memory_store.Failover.FAILOVER_NONE:
-      self.tier = BASIC_TIER
-    elif (
-        self.failover_style
-        == managed_memory_store.Failover.FAILOVER_SAME_REGION
-    ):
-      self.tier = STANDARD_TIER
+    self.tier = self._GetTier()
+    self.network = (
+        'default'
+        if not gcp_flags.GCE_NETWORK_NAMES.value
+        else gcp_flags.GCE_NETWORK_NAMES.value[0]
+    )
+    self.subnet = (
+        'default'
+        if not gcp_flags.GCE_SUBNET_NAMES.value
+        else gcp_flags.GCE_SUBNET_NAMES.value[0]
+    )
     # Update the environment for gcloud commands:
     os.environ['CLOUDSDK_API_ENDPOINT_OVERRIDES_REDIS'] = (
         gcp_flags.CLOUD_REDIS_API_OVERRIDE.value
     )
 
+  def _GetTier(self) -> Optional[str]:
+    """Returns the tier of the instance."""
+    # See https://cloud.google.com/memorystore/docs/redis/redis-tiers."""
+    if self._clustered:
+      return None
+    if self.failover_style == managed_memory_store.Failover.FAILOVER_NONE:
+      return BASIC_TIER
+    return STANDARD_TIER
+
   @staticmethod
-  def CheckPrerequisites(benchmark_config):
+  def CheckPrerequisites(_):
     if (
         FLAGS.redis_failover_style
         == managed_memory_store.Failover.FAILOVER_SAME_ZONE
@@ -79,7 +97,7 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
     ):
       raise errors.Config.InvalidValue('Invalid Redis version.')
 
-  def GetResourceMetadata(self):
+  def GetResourceMetadata(self) -> dict[str, Any]:
     """Returns a dict containing metadata about the instance.
 
     Returns:
@@ -88,10 +106,11 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
     self.metadata.update({
         'cloud_redis_failover_style': self.failover_style,
         'cloud_redis_size': self.size,
-        'cloud_redis_tier': self.tier,
         'cloud_redis_region': self.redis_region,
         'cloud_redis_version': self.ParseReadableVersion(self.redis_version),
     })
+    if self.tier is not None:
+      self.metadata['cloud_redis_tier'] = self.tier
     return self.metadata
 
   @staticmethod
@@ -108,26 +127,71 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
       return version
     return '.'.join(version.split('_')[1:])
 
-  def _Create(self):
-    """Creates the instance."""
-    cmd = util.GcloudCommand(self, 'redis', 'instances', 'create', self.name)
+  def _CreateServiceConnectionPolicy(self) -> None:
+    """Creates a service connection policy for the VPC."""
+    cmd = util.GcloudCommand(
+        self,
+        'network-connectivity',
+        'service-connection-policies',
+        'create',
+        f'pkb-{FLAGS.run_uri}-policy',
+    )
+    cmd.flags['service-class'] = 'gcp-memorystore-redis'
+    cmd.flags['network'] = self.network
     cmd.flags['region'] = self.redis_region
+    cmd.flags['subnets'] = (
+        'https://www.googleapis.com/compute/v1'
+        f'/projects/{self.project}'
+        f'/regions/{self.redis_region}/subnetworks/{self.subnet}'
+    )
+    cmd.Issue(raise_on_failure=False)
+
+  def _GetClusterCreateCommand(self) -> util.GcloudCommand:
+    """Returns the command used to create the cluster."""
+    cmd = util.GcloudCommand(self, 'redis', 'clusters', 'create', self.name)
+    cmd.use_alpha_gcloud = True
+    # Add labels when supported
+    cmd.flags['shard-count'] = self.node_count
+    cmd.flags['network'] = (
+        f'projects/{self.project}/global/networks/{self.network}'
+    )
+    if self.enable_tls:
+      cmd.flags['transit-encryption-mode'] = 'server-authentication'
+    return cmd
+
+  def _GetCreateCommand(self) -> util.GcloudCommand:
+    """Returns the command used to create the instance."""
+    cmd = util.GcloudCommand(self, 'redis', 'instances', 'create', self.name)
     cmd.flags['zone'] = FLAGS.zone[0]
-    cmd.flags['network'] = FLAGS.gce_network_name
+    cmd.flags['network'] = self.network
     cmd.flags['tier'] = self.tier
     cmd.flags['size'] = self.size
     cmd.flags['redis-version'] = self.redis_version
     cmd.flags['labels'] = util.MakeFormattedDefaultTags()
+    return cmd
+
+  def _Create(self):
+    """Creates the instance."""
+    cmd = self._GetCreateCommand()
+    if self._clustered:
+      self._CreateServiceConnectionPolicy()
+      cmd = self._GetClusterCreateCommand()
+    cmd.flags['region'] = self.redis_region
     cmd.Issue(timeout=COMMAND_TIMEOUT)
 
   def _IsReady(self):
     """Returns whether cluster is ready."""
     instance_details, _, _ = self.DescribeInstance()
+    if self._clustered:
+      return json.loads(instance_details).get('state') == 'ACTIVE'
     return json.loads(instance_details).get('state') == 'READY'
 
   def _Delete(self):
     """Deletes the instance."""
     cmd = util.GcloudCommand(self, 'redis', 'instances', 'delete', self.name)
+    if self._clustered:
+      cmd = util.GcloudCommand(self, 'redis', 'clusters', 'delete', self.name)
+      cmd.use_alpha_gcloud = True
     cmd.flags['region'] = self.redis_region
     cmd.Issue(timeout=COMMAND_TIMEOUT, raise_on_failure=False)
 
@@ -143,6 +207,9 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
       stdout, stderr, and retcode.
     """
     cmd = util.GcloudCommand(self, 'redis', 'instances', 'describe', self.name)
+    if self._clustered:
+      cmd = util.GcloudCommand(self, 'redis', 'clusters', 'describe', self.name)
+      cmd.use_alpha_gcloud = True
     cmd.flags['region'] = self.redis_region
     stdout, stderr, retcode = cmd.Issue(raise_on_failure=False)
     if retcode != 0:
@@ -162,6 +229,10 @@ class CloudRedis(managed_memory_store.BaseManagedMemoryStore):
       raise errors.Resource.RetryableGetError(
           'Failed to retrieve information on {}'.format(self.name)
       )
+    if self._clustered:
+      self._ip = json.loads(stdout)['discoveryEndpoints'][0]['address']
+      self._port = 6379
+      return
     self._ip = json.loads(stdout)['host']
     self._port = json.loads(stdout)['port']
 

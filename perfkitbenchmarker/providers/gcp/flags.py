@@ -66,6 +66,20 @@ flags.DEFINE_string(
     'gce_subnet_addr', '10.128.0.0/20', 'Address range to the '
     'subnet, given in CDR notation. Not used unless '
     '--gce_subnet_region is given.')
+GCE_AVAILABILITY_DOMAIN_COUNT = flags.DEFINE_integer(
+    'gce_availability_domain_count',
+    0,
+    'Number of fault domains to create for availability-domain placement group',
+    lower_bound=0,
+    upper_bound=8
+)
+
+GCE_PLACEMENT_GROUP_MAX_DISTANCE = flags.DEFINE_integer(
+    'gce_placement_group_max_distance',
+    None,
+    'Number of max logical switches between VMs.',
+    lower_bound=0
+)
 flags.DEFINE_string(
     'gce_remote_access_firewall_rule', None, 'The name of an '
     'already created firewall rule which allows remote access '
@@ -102,6 +116,11 @@ GCE_NIC_RECORD_VERSION = flags.DEFINE_boolean(
 EGRESS_BANDWIDTH_TIER = flags.DEFINE_enum(
     'gce_egress_bandwidth_tier', None, ['TIER_1'],
     'Egress bandwidth tier of the GCE VMs.')
+GCE_CREATE_LOG_HTTP = flags.DEFINE_boolean(
+    'gce_create_log_http',
+    False,
+    'If True, pass --log-http to gcloud compute instance create.',
+)
 
 flags.DEFINE_string('gcp_node_type', None,
                     'The node type of all sole tenant hosts that get created.')
@@ -117,7 +136,11 @@ flags.DEFINE_string(
     'compute instance create command.')
 flags.DEFINE_string('gcp_preprovisioned_data_bucket', None,
                     'GCS bucket where pre-provisioned data has been copied.')
-flags.DEFINE_integer('gcp_redis_gb', 5, 'Size of redis cluster in gb')
+REDIS_GB = flags.DEFINE_integer(
+    'gcp_redis_gb',
+    5,
+    'Size of redis instance in gb.'
+)
 flags.DEFINE_string('gcp_service_account', None, 'Service account to use for '
                     'authorization.')
 flags.DEFINE_string(
@@ -229,6 +252,11 @@ LM_NOTIFICATION_METADATA_NAME = flags.DEFINE_string(
     'instance/maintenance-event',
     'Lm notification metadata name to listen on.',
 )
+flags.DEFINE_list(
+    'data_disk_zones', [],
+    'The zone of the GCP data disk. This is used to provision regional pd with '
+    'multiple zones.'
+    )
 
 
 def _ValidatePreemptFlags(flags_dict):
